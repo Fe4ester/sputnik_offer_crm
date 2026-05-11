@@ -15,6 +15,16 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 from sputnik_offer_crm.config import get_settings
 from sputnik_offer_crm.db.base import Base
 
+# Import all models to register them with Base.metadata
+from sputnik_offer_crm.models import (  # noqa: F401
+    Direction,
+    DirectionStage,
+    InviteCode,
+    Mentor,
+    Student,
+    StudentProgress,
+)
+
 # this is the Alembic Config object, which provides
 # access to the values within the .ini file in use.
 config = context.config
