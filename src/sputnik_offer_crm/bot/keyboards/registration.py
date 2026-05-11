@@ -78,9 +78,36 @@ def get_other_timezone_keyboard() -> InlineKeyboardMarkup:
             )
         buttons.append(row)
 
+    # Input local time button
+    buttons.append([
+        InlineKeyboardButton(
+            text="⏰ Ввести своё время",
+            callback_data="tz:input_time"
+        )
+    ])
+
     # Back button
     buttons.append([
         InlineKeyboardButton(text="⬅️ Назад", callback_data="tz:back")
     ])
 
+    return InlineKeyboardMarkup(inline_keyboard=buttons)
+
+
+def get_timezone_confirmation_keyboard(timezone_str: str) -> InlineKeyboardMarkup:
+    """Get keyboard for timezone confirmation."""
+    buttons = [
+        [
+            InlineKeyboardButton(
+                text="✅ Подтвердить",
+                callback_data=f"tz_confirm:{timezone_str}"
+            )
+        ],
+        [
+            InlineKeyboardButton(
+                text="❌ Выбрать другой",
+                callback_data="tz:back"
+            )
+        ],
+    ]
     return InlineKeyboardMarkup(inline_keyboard=buttons)
