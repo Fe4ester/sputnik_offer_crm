@@ -8,3 +8,5 @@ class RegistrationStates(StatesGroup):
 
     waiting_for_code = State()
     waiting_for_timezone = State()
+    waiting_for_local_time = State()
+    confirming_timezone = State()

@@ -7,6 +7,7 @@ from aiogram.types import CallbackQuery, Message
 
 from sputnik_offer_crm.bot.keyboards import (
     get_other_timezone_keyboard,
+    get_timezone_confirmation_keyboard,
     get_timezone_keyboard,
 )
 from sputnik_offer_crm.bot.states import RegistrationStates
@@ -18,6 +19,7 @@ from sputnik_offer_crm.services import (
     RegistrationService,
 )
 from sputnik_offer_crm.utils.logging import get_logger
+from sputnik_offer_crm.utils.timezone import detect_timezone_from_local_time
 
 router = Router(name="registration")
 logger = get_logger(__name__)
@@ -111,7 +113,10 @@ async def handle_timezone_selection(
 
     if timezone_data == "other":
         await callback.message.edit_text(
-            "🌍 Выберите ваш часовой пояс:",
+            "🌍 Выберите часовой пояс:\n\n"
+            "Вы можете:\n"
+            "• Выбрать UTC смещение кнопками\n"
+            "• Нажать «⏰ Ввести своё время» и отправить текущее время в формате HH:MM",
             reply_markup=get_other_timezone_keyboard(),
         )
         return
@@ -123,8 +128,76 @@ async def handle_timezone_selection(
         )
         return
 
-    # Complete registration
+    if timezone_data == "input_time":
+        await callback.message.edit_text(
+            "⏰ Введите ваше текущее локальное время в формате HH:MM\n\n"
+            "Например: 15:30\n\n"
+            "Бот определит ваш часовой пояс по разнице с UTC."
+        )
+        await state.set_state(RegistrationStates.waiting_for_local_time)
+        return
+
+    # Direct timezone selection - complete registration
     await complete_registration(callback, state, timezone_data)
+
+
+@router.message(RegistrationStates.waiting_for_local_time)
+async def handle_local_time_input(message: Message, state: FSMContext) -> None:
+    """Handle local time input for timezone detection."""
+    local_time_str = message.text.strip()
+
+    # Detect timezone from local time
+    detection_result = detect_timezone_from_local_time(local_time_str)
+
+    if not detection_result:
+        await message.answer(
+            "❌ Неверный формат времени.\n\n"
+            "Пожалуйста, введите время в формате HH:MM (например: 15:30)\n"
+            "Или вернитесь назад и выберите часовой пояс кнопками."
+        )
+        return
+
+    # Store detected timezone and ask for confirmation
+    await state.update_data(detected_timezone=detection_result.timezone_str)
+
+    await message.answer(
+        f"✅ По вашему времени определён часовой пояс:\n\n"
+        f"📍 {detection_result.display_name}\n\n"
+        f"Подтвердите выбор:",
+        reply_markup=get_timezone_confirmation_keyboard(detection_result.timezone_str),
+    )
+    await state.set_state(RegistrationStates.confirming_timezone)
+
+
+@router.callback_query(
+    RegistrationStates.confirming_timezone, F.data.startswith("tz_confirm:")
+)
+async def handle_timezone_confirmation(
+    callback: CallbackQuery, state: FSMContext
+) -> None:
+    """Handle timezone confirmation."""
+    await callback.answer()
+
+    timezone_str = callback.data.split(":", 1)[1]
+
+    # Complete registration with confirmed timezone
+    await complete_registration(callback, state, timezone_str)
+
+
+@router.callback_query(
+    RegistrationStates.confirming_timezone, F.data == "tz:back"
+)
+async def handle_timezone_reselection(
+    callback: CallbackQuery, state: FSMContext
+) -> None:
+    """Handle timezone reselection from confirmation."""
+    await callback.answer()
+
+    await callback.message.edit_text(
+        "Выберите ваш часовой пояс:",
+        reply_markup=get_timezone_keyboard(),
+    )
+    await state.set_state(RegistrationStates.waiting_for_timezone)
 
 
 async def complete_registration(
