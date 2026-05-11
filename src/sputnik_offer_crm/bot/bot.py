@@ -3,6 +3,7 @@
 from aiogram import Bot, Dispatcher
 from aiogram.client.default import DefaultBotProperties
 from aiogram.enums import ParseMode
+from aiogram.fsm.storage.memory import MemoryStorage
 
 from sputnik_offer_crm.bot.handlers import router
 from sputnik_offer_crm.config import get_settings
@@ -19,6 +20,7 @@ def create_bot() -> Bot:
 
 def create_dispatcher() -> Dispatcher:
     """Create and configure dispatcher with handlers."""
-    dp = Dispatcher()
+    storage = MemoryStorage()
+    dp = Dispatcher(storage=storage)
     dp.include_router(router)
     return dp
