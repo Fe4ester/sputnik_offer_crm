@@ -1,0 +1,25 @@
+[project]
+name = "sputnik-offer-crm"
+version = "0.1.0"
+description = "Sputnik Offer CRM Telegram Bot"
+authors = [
+    {name = "lian",email = "xdxdxd4305@gmail.com"}
+]
+requires-python = ">=3.12"
+dependencies = [
+    "aiogram>=3.15.0",
+    "sqlalchemy[asyncio]>=2.0.36",
+    "asyncpg>=0.30.0",
+    "alembic>=1.14.0",
+    "pydantic>=2.10.5",
+    "pydantic-settings>=2.7.0",
+    "structlog>=24.4.0",
+]
+
+
+[tool.poetry]
+packages = [{include = "sputnik_offer_crm", from = "src"}]
+
+[build-system]
+requires = ["poetry-core>=2.0.0,<3.0.0"]
+build-backend = "poetry.core.masonry.api"
