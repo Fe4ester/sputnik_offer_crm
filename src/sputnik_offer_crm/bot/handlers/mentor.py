@@ -2,7 +2,7 @@
 
 from aiogram import F, Router
 from aiogram.fsm.context import FSMContext
-from aiogram.types import CallbackQuery, Message
+from aiogram.types import CallbackQuery, Message, InlineKeyboardButton, InlineKeyboardMarkup
 
 from sputnik_offer_crm.bot.keyboards import (
     get_direction_selection_keyboard,
@@ -10,12 +10,13 @@ from sputnik_offer_crm.bot.keyboards import (
     get_timezone_keyboard,
 )
 from sputnik_offer_crm.bot.keyboards.mentor import get_mentor_timezone_fallback_keyboard
-from sputnik_offer_crm.bot.states import MentorInviteCodeStates
+from sputnik_offer_crm.bot.states import MentorInviteCodeStates, MentorStudentViewStates
 from sputnik_offer_crm.db import get_session
 from sputnik_offer_crm.services import (
     InviteCodeGenerationError,
     MentorNotFoundError,
     MentorService,
+    MentorStudentService,
 )
 from sputnik_offer_crm.utils.logging import get_logger
 
@@ -203,3 +204,190 @@ async def create_invite_code(
             )
         finally:
             await state.clear()
+
+
+@router.message(F.text == "👤 Найти ученика")
+async def start_student_search(message: Message, state: FSMContext) -> None:
+    """Start student search flow."""
+    async with get_session() as session:
+        service = MentorService(session)
+
+        try:
+            await service.check_mentor_access(message.from_user.id)
+        except MentorNotFoundError:
+            await message.answer("❌ Доступ запрещён. Вы не являетесь ментором.")
+            return
+
+        await message.answer(
+            "🔍 Поиск ученика\n\n"
+            "Введите для поиска:\n"
+            "• Telegram username (с @ или без)\n"
+            "• Имя или фамилию\n"
+            "• Telegram ID"
+        )
+        await state.set_state(MentorStudentViewStates.waiting_for_search_query)
+
+
+@router.message(MentorStudentViewStates.waiting_for_search_query)
+async def process_student_search(message: Message, state: FSMContext) -> None:
+    """Process student search query."""
+    if not message.text:
+        await message.answer("Пожалуйста, отправьте текстовое сообщение.")
+        return
+
+    query = message.text.strip()
+
+    async with get_session() as session:
+        service = MentorStudentService(session)
+        results = await service.search_students(query)
+
+        if not results:
+            await message.answer(
+                f"❌ Ученики не найдены по запросу: {query}\n\n"
+                "Попробуйте другой запрос или проверьте правильность ввода.",
+                reply_markup=get_mentor_menu_keyboard(),
+            )
+            await state.clear()
+            return
+
+        if len(results) == 1:
+            # Single result - show card immediately
+            await state.clear()
+            await show_student_card(message, results[0].student.id)
+            return
+
+        # Multiple results - show selection
+        buttons = []
+        for result in results:
+            student = result.student
+            display_name = f"{student.first_name}"
+            if student.last_name:
+                display_name += f" {student.last_name}"
+            if student.username:
+                display_name += f" (@{student.username})"
+            if result.direction_name:
+                display_name += f" — {result.direction_name}"
+
+            buttons.append([
+                InlineKeyboardButton(
+                    text=display_name,
+                    callback_data=f"student:{student.id}"
+                )
+            ])
+
+        buttons.append([
+            InlineKeyboardButton(text="❌ Отмена", callback_data="cancel_search")
+        ])
+
+        await message.answer(
+            f"🔍 Найдено учеников: {len(results)}\n\n"
+            "Выберите ученика:",
+            reply_markup=InlineKeyboardMarkup(inline_keyboard=buttons),
+        )
+        await state.clear()
+
+
+@router.callback_query(F.data.startswith("student:"))
+async def handle_student_selection(callback: CallbackQuery) -> None:
+    """Handle student selection from search results."""
+    await callback.answer()
+
+    student_id = int(callback.data.split(":", 1)[1])
+    await callback.message.delete()
+    await show_student_card(callback.message, student_id)
+
+
+@router.callback_query(F.data == "cancel_search")
+async def handle_search_cancel(callback: CallbackQuery) -> None:
+    """Handle search cancellation."""
+    await callback.answer()
+    await callback.message.edit_text("❌ Поиск отменён.")
+
+
+async def show_student_card(message: Message, student_id: int) -> None:
+    """Show student card to mentor."""
+    async with get_session() as session:
+        service = MentorStudentService(session)
+        card = await service.get_student_card(student_id)
+
+        if not card:
+            await message.answer(
+                "❌ Информация об ученике не найдена.",
+                reply_markup=get_mentor_menu_keyboard(),
+            )
+            return
+
+        # Build card text
+        lines = ["👤 Карточка ученика\n"]
+
+        # Basic info
+        lines.append(f"📛 Имя: {card.student.first_name}")
+        if card.student.last_name:
+            lines.append(f"   Фамилия: {card.student.last_name}")
+        if card.student.username:
+            lines.append(f"💬 Username: @{card.student.username}")
+        lines.append(f"🆔 Telegram ID: {card.student.telegram_id}")
+        lines.append("")
+
+        # Progress info
+        lines.append(f"📚 Направление: {card.direction.name}")
+        lines.append(f"📍 Текущий этап: {card.current_stage.title}")
+        started_date = card.progress.started_at.strftime("%d.%m.%Y")
+        lines.append(f"📅 Дата старта: {started_date}")
+        lines.append(f"🌍 Часовой пояс: {card.student.timezone}")
+        status_emoji = "✅" if card.student.is_active else "⏸"
+        status_text = "Активен" if card.student.is_active else "Неактивен"
+        lines.append(f"{status_emoji} Статус: {status_text}")
+        lines.append("")
+
+        # Deadlines
+        if card.deadlines:
+            lines.append("📅 Ближайшие дедлайны:")
+            for deadline in card.deadlines[:5]:  # Show max 5
+                status_emoji = "⚠️" if deadline.is_overdue else "📌"
+                date_str = deadline.deadline_date.strftime("%d.%m.%Y")
+                lines.append(f"{status_emoji} {deadline.title}")
+                lines.append(f"   Срок: {date_str}")
+                if deadline.is_overdue:
+                    lines.append("   (просрочен)")
+            lines.append("")
+        else:
+            lines.append("📅 Дедлайны: не назначены\n")
+
+        # Weekly reports
+        if card.recent_reports:
+            lines.append("📝 Последние отчёты:")
+            for report in card.recent_reports:
+                week_str = report.week_start_date.strftime("%d.%m.%Y")
+                lines.append(f"\n📅 Неделя с {week_str}:")
+                
+                # Truncate long answers
+                what_did = report.answer_what_did
+                if len(what_did) > 150:
+                    what_did = what_did[:150] + "..."
+                lines.append(f"• Что делал: {what_did}")
+                
+                if report.answer_problems_solved:
+                    solved = report.answer_problems_solved
+                    if len(solved) > 100:
+                        solved = solved[:100] + "..."
+                    lines.append(f"• Решённые проблемы: {solved}")
+                
+                if report.answer_problems_unsolved:
+                    unsolved = report.answer_problems_unsolved
+                    if len(unsolved) > 100:
+                        unsolved = unsolved[:100] + "..."
+                    lines.append(f"• Нужна помощь: {unsolved}")
+        else:
+            lines.append("📝 Отчёты: пока не отправлялись")
+
+        await message.answer(
+            "\n".join(lines),
+            reply_markup=get_mentor_menu_keyboard(),
+        )
+
+        logger.info(
+            "Mentor viewed student card",
+            mentor_id=message.from_user.id,
+            student_id=student_id,
+        )
