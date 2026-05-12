@@ -42,6 +42,22 @@ class NextStageNotFoundError(MoveToNextStageError):
     """Next stage not found in direction."""
 
 
+class ManualStageSelectionError(Exception):
+    """Base error for manual stage selection operation."""
+
+
+class StageNotFoundError(ManualStageSelectionError):
+    """Stage not found."""
+
+
+class StageNotInDirectionError(ManualStageSelectionError):
+    """Stage does not belong to student's direction."""
+
+
+class AlreadyOnThisStageError(ManualStageSelectionError):
+    """Student is already on this stage."""
+
+
 class MentorProgressService:
     """Service for mentor progress management operations."""
 
@@ -201,3 +217,169 @@ class MentorProgressService:
         await self.session.commit()
 
         return info.next_stage
+
+    async def get_available_stages(self, student_id: int) -> list[Stage]:
+        """
+        Get list of available stages for student's direction.
+
+        Args:
+            student_id: student ID
+
+        Returns:
+            List of stages in student's direction, ordered by stage_number
+
+        Raises:
+            StudentNotFoundError: if student not found
+            StudentHasNoProgressError: if student has no progress
+        """
+        # Get student
+        result = await self.session.execute(
+            select(Student).where(Student.id == student_id)
+        )
+        student = result.scalar_one_or_none()
+
+        if not student:
+            raise StudentNotFoundError(f"Student {student_id} not found")
+
+        # Get student progress
+        result = await self.session.execute(
+            select(StudentProgress).where(StudentProgress.student_id == student.id)
+        )
+        progress = result.scalar_one_or_none()
+
+        if not progress:
+            raise StudentHasNoProgressError(
+                f"Student {student_id} has no progress record"
+            )
+
+        # Get all active stages in direction
+        result = await self.session.execute(
+            select(Stage)
+            .where(
+                Stage.direction_id == progress.direction_id,
+                Stage.is_active == True,  # noqa: E712
+            )
+            .order_by(Stage.stage_number)
+        )
+        stages = list(result.scalars().all())
+
+        return stages
+
+    async def move_to_stage(self, student_id: int, target_stage_id: int) -> Stage:
+        """
+        Move student to a specific stage manually.
+
+        This operation:
+        1. Validates that target stage belongs to student's direction
+        2. Updates StudentProgress.current_stage_id to target stage
+        3. Marks current StudentStageProgress as done (if exists and different)
+        4. Creates or updates StudentStageProgress for target stage as active
+
+        Args:
+            student_id: student ID
+            target_stage_id: target stage ID
+
+        Returns:
+            Target stage that student was moved to
+
+        Raises:
+            StudentNotFoundError: if student not found
+            StudentHasNoProgressError: if student has no progress
+            StageNotFoundError: if target stage not found
+            StageNotInDirectionError: if stage doesn't belong to student's direction
+            AlreadyOnThisStageError: if student is already on this stage
+        """
+        # Get student
+        result = await self.session.execute(
+            select(Student).where(Student.id == student_id)
+        )
+        student = result.scalar_one_or_none()
+
+        if not student:
+            raise StudentNotFoundError(f"Student {student_id} not found")
+
+        # Get student progress
+        result = await self.session.execute(
+            select(StudentProgress).where(StudentProgress.student_id == student.id)
+        )
+        progress = result.scalar_one_or_none()
+
+        if not progress:
+            raise StudentHasNoProgressError(
+                f"Student {student_id} has no progress record"
+            )
+
+        # Get target stage
+        result = await self.session.execute(
+            select(Stage).where(Stage.id == target_stage_id)
+        )
+        target_stage = result.scalar_one_or_none()
+
+        if not target_stage:
+            raise StageNotFoundError(f"Stage {target_stage_id} not found")
+
+        # Validate stage belongs to student's direction
+        if target_stage.direction_id != progress.direction_id:
+            raise StageNotInDirectionError(
+                f"Stage {target_stage_id} does not belong to student's direction"
+            )
+
+        # Check if already on this stage
+        if progress.current_stage_id == target_stage_id:
+            raise AlreadyOnThisStageError(
+                f"Student {student_id} is already on stage {target_stage_id}"
+            )
+
+        today = date.today()
+
+        # Get current stage
+        result = await self.session.execute(
+            select(Stage).where(Stage.id == progress.current_stage_id)
+        )
+        current_stage = result.scalar_one()
+
+        # 1. Update StudentProgress to point to target stage
+        progress.current_stage_id = target_stage.id
+
+        # 2. Mark current stage progress as done (if exists)
+        result = await self.session.execute(
+            select(StudentStageProgress).where(
+                StudentStageProgress.student_id == student_id,
+                StudentStageProgress.stage_id == current_stage.id,
+            )
+        )
+        current_stage_progress = result.scalar_one_or_none()
+
+        if current_stage_progress:
+            current_stage_progress.status = "done"
+            current_stage_progress.completed_at = today
+            current_stage_progress.updated_at = datetime.now(timezone.utc)
+
+        # 3. Create or update target stage progress as active
+        result = await self.session.execute(
+            select(StudentStageProgress).where(
+                StudentStageProgress.student_id == student_id,
+                StudentStageProgress.stage_id == target_stage.id,
+            )
+        )
+        target_stage_progress = result.scalar_one_or_none()
+
+        if target_stage_progress:
+            # Update existing record
+            target_stage_progress.status = "active"
+            if not target_stage_progress.started_at:
+                target_stage_progress.started_at = today
+            target_stage_progress.updated_at = datetime.now(timezone.utc)
+        else:
+            # Create new record
+            target_stage_progress = StudentStageProgress(
+                student_id=student_id,
+                stage_id=target_stage.id,
+                status="active",
+                started_at=today,
+            )
+            self.session.add(target_stage_progress)
+
+        await self.session.commit()
+
+        return target_stage

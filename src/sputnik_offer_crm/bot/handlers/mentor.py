@@ -14,12 +14,16 @@ from sputnik_offer_crm.bot.states import MentorInviteCodeStates, MentorStudentVi
 from sputnik_offer_crm.db import get_session
 from sputnik_offer_crm.services import (
     AlreadyOnFinalStageError,
+    AlreadyOnThisStageError,
     InviteCodeGenerationError,
+    ManualStageSelectionError,
     MentorNotFoundError,
     MentorProgressService,
     MentorService,
     MentorStudentService,
     MoveToNextStageError,
+    StageNotFoundError,
+    StageNotInDirectionError,
     StudentHasNoProgressError,
     StudentNotFoundError as ProgressStudentNotFoundError,
 )
@@ -386,13 +390,21 @@ async def show_student_card(message: Message, student_id: int) -> None:
         else:
             lines.append("📝 Отчёты: пока не отправлялись")
 
-        # Add action button for moving to next stage
-        buttons = [[
-            InlineKeyboardButton(
-                text="➡️ Перевести на следующий этап",
-                callback_data=f"move_next:{student_id}"
-            )
-        ]]
+        # Add action buttons
+        buttons = [
+            [
+                InlineKeyboardButton(
+                    text="➡️ Перевести на следующий этап",
+                    callback_data=f"move_next:{student_id}"
+                )
+            ],
+            [
+                InlineKeyboardButton(
+                    text="🎯 Выбрать этап вручную",
+                    callback_data=f"select_stage:{student_id}"
+                )
+            ],
+        ]
 
         await message.answer(
             "\n".join(lines),
@@ -548,6 +560,305 @@ async def handle_confirm_move_to_next_stage(callback: CallbackQuery, state: FSMC
 @router.callback_query(MentorStudentViewStates.confirming_next_stage, F.data.startswith("cancel_move:"))
 async def handle_cancel_move_to_next_stage(callback: CallbackQuery, state: FSMContext) -> None:
     """Handle cancellation of move to next stage."""
+    await callback.answer()
+
+    student_id = int(callback.data.split(":", 1)[1])
+
+    await callback.message.edit_text("❌ Перевод отменён.")
+    await state.clear()
+
+    # Show card again
+    await show_student_card(callback.message, student_id)
+
+
+@router.callback_query(F.data.startswith("select_stage:"))
+async def handle_select_stage_request(callback: CallbackQuery, state: FSMContext) -> None:
+    """Handle request to select stage manually."""
+    await callback.answer()
+
+    student_id = int(callback.data.split(":", 1)[1])
+
+    async with get_session() as session:
+        # Check mentor access
+        mentor_service = MentorService(session)
+        try:
+            await mentor_service.check_mentor_access(callback.from_user.id)
+        except MentorNotFoundError:
+            await callback.message.edit_text("❌ Доступ запрещён. Вы не являетесь ментором.")
+            return
+
+        # Get available stages
+        progress_service = MentorProgressService(session)
+        try:
+            stages = await progress_service.get_available_stages(student_id)
+        except ProgressStudentNotFoundError:
+            await callback.message.edit_text(
+                "❌ Ученик не найден.",
+                reply_markup=get_mentor_menu_keyboard(),
+            )
+            return
+        except StudentHasNoProgressError:
+            await callback.message.edit_text(
+                "❌ У ученика нет записи о прогрессе.",
+                reply_markup=get_mentor_menu_keyboard(),
+            )
+            return
+        except Exception as e:
+            logger.error("Failed to get available stages", error=str(e))
+            await callback.message.edit_text(
+                "❌ Не удалось получить список этапов.",
+                reply_markup=get_mentor_menu_keyboard(),
+            )
+            return
+
+        if not stages:
+            await callback.message.edit_text(
+                "❌ Нет доступных этапов в направлении ученика.",
+                reply_markup=get_mentor_menu_keyboard(),
+            )
+            return
+
+        # Show stage selection
+        buttons = []
+        for stage in stages:
+            buttons.append([
+                InlineKeyboardButton(
+                    text=f"{stage.stage_number}. {stage.title}",
+                    callback_data=f"stage:{student_id}:{stage.id}"
+                )
+            ])
+
+        buttons.append([
+            InlineKeyboardButton(text="❌ Отмена", callback_data=f"cancel_select:{student_id}")
+        ])
+
+        await callback.message.edit_text(
+            "🎯 Выбор этапа вручную\n\n"
+            "Выберите этап для ученика:",
+            reply_markup=InlineKeyboardMarkup(inline_keyboard=buttons),
+        )
+
+        await state.update_data(student_id=student_id)
+        await state.set_state(MentorStudentViewStates.selecting_manual_stage)
+
+
+@router.callback_query(MentorStudentViewStates.selecting_manual_stage, F.data.startswith("stage:"))
+async def handle_stage_selection(callback: CallbackQuery, state: FSMContext) -> None:
+    """Handle stage selection."""
+    await callback.answer()
+
+    parts = callback.data.split(":", 2)
+    student_id = int(parts[1])
+    stage_id = int(parts[2])
+
+    async with get_session() as session:
+        # Check mentor access
+        mentor_service = MentorService(session)
+        try:
+            await mentor_service.check_mentor_access(callback.from_user.id)
+        except MentorNotFoundError:
+            await callback.message.edit_text("❌ Доступ запрещён.")
+            await state.clear()
+            return
+
+        # Get stage info and student info
+        progress_service = MentorProgressService(session)
+        from sputnik_offer_crm.models import Stage, Student, StudentProgress
+        from sqlalchemy import select
+
+        try:
+            # Get student
+            result = await session.execute(
+                select(Student).where(Student.id == student_id)
+            )
+            student = result.scalar_one_or_none()
+
+            if not student:
+                await callback.message.edit_text(
+                    "❌ Ученик не найден.",
+                    reply_markup=get_mentor_menu_keyboard(),
+                )
+                await state.clear()
+                return
+
+            # Get student progress
+            result = await session.execute(
+                select(StudentProgress).where(StudentProgress.student_id == student_id)
+            )
+            progress = result.scalar_one_or_none()
+
+            if not progress:
+                await callback.message.edit_text(
+                    "❌ У ученика нет записи о прогрессе.",
+                    reply_markup=get_mentor_menu_keyboard(),
+                )
+                await state.clear()
+                return
+
+            # Get current stage
+            result = await session.execute(
+                select(Stage).where(Stage.id == progress.current_stage_id)
+            )
+            current_stage = result.scalar_one()
+
+            # Get target stage
+            result = await session.execute(
+                select(Stage).where(Stage.id == stage_id)
+            )
+            target_stage = result.scalar_one_or_none()
+
+            if not target_stage:
+                await callback.message.edit_text(
+                    "❌ Выбранный этап не найден.",
+                    reply_markup=get_mentor_menu_keyboard(),
+                )
+                await state.clear()
+                return
+
+            # Check if already on this stage
+            if progress.current_stage_id == stage_id:
+                await callback.message.edit_text(
+                    f"ℹ️ Ученик уже находится на этом этапе.\n\n"
+                    f"Текущий этап: {current_stage.title}",
+                    reply_markup=get_mentor_menu_keyboard(),
+                )
+                await state.clear()
+                return
+
+            # Show confirmation
+            student_name = student.first_name
+            if student.last_name:
+                student_name += f" {student.last_name}"
+
+            confirmation_text = (
+                f"🎯 Ручной выбор этапа\n\n"
+                f"👤 Ученик: {student_name}\n\n"
+                f"📍 Текущий этап:\n{current_stage.title}\n\n"
+                f"➡️ Новый этап:\n{target_stage.title}\n\n"
+                f"Подтвердите перевод:"
+            )
+
+            buttons = [
+                [
+                    InlineKeyboardButton(
+                        text="✅ Подтвердить",
+                        callback_data=f"confirm_manual:{student_id}:{stage_id}"
+                    ),
+                    InlineKeyboardButton(
+                        text="❌ Отмена",
+                        callback_data=f"cancel_manual:{student_id}"
+                    ),
+                ]
+            ]
+
+            await callback.message.edit_text(
+                confirmation_text,
+                reply_markup=InlineKeyboardMarkup(inline_keyboard=buttons),
+            )
+
+            await state.update_data(student_id=student_id, stage_id=stage_id)
+            await state.set_state(MentorStudentViewStates.confirming_manual_stage)
+
+        except Exception as e:
+            logger.error("Failed to prepare stage selection confirmation", error=str(e), exc_info=True)
+            await callback.message.edit_text(
+                "❌ Произошла ошибка при подготовке подтверждения.",
+                reply_markup=get_mentor_menu_keyboard(),
+            )
+            await state.clear()
+
+
+@router.callback_query(MentorStudentViewStates.selecting_manual_stage, F.data.startswith("cancel_select:"))
+async def handle_cancel_stage_selection(callback: CallbackQuery, state: FSMContext) -> None:
+    """Handle cancellation of stage selection."""
+    await callback.answer()
+
+    student_id = int(callback.data.split(":", 1)[1])
+
+    await callback.message.edit_text("❌ Выбор этапа отменён.")
+    await state.clear()
+
+    # Show card again
+    await show_student_card(callback.message, student_id)
+
+
+@router.callback_query(MentorStudentViewStates.confirming_manual_stage, F.data.startswith("confirm_manual:"))
+async def handle_confirm_manual_stage(callback: CallbackQuery, state: FSMContext) -> None:
+    """Handle confirmation of manual stage selection."""
+    await callback.answer()
+
+    parts = callback.data.split(":", 2)
+    student_id = int(parts[1])
+    stage_id = int(parts[2])
+
+    async with get_session() as session:
+        # Check mentor access
+        mentor_service = MentorService(session)
+        try:
+            await mentor_service.check_mentor_access(callback.from_user.id)
+        except MentorNotFoundError:
+            await callback.message.edit_text("❌ Доступ запрещён.")
+            await state.clear()
+            return
+
+        # Perform the move
+        progress_service = MentorProgressService(session)
+        try:
+            target_stage = await progress_service.move_to_stage(student_id, stage_id)
+
+            await callback.message.edit_text(
+                f"✅ Ученик успешно переведён на выбранный этап!\n\n"
+                f"➡️ Новый этап: {target_stage.title}"
+            )
+
+            logger.info(
+                "Student moved to stage manually",
+                mentor_id=callback.from_user.id,
+                student_id=student_id,
+                new_stage_id=target_stage.id,
+            )
+
+            # Show updated card
+            await show_student_card(callback.message, student_id)
+
+        except ProgressStudentNotFoundError:
+            await callback.message.edit_text(
+                "❌ Ученик не найден.",
+                reply_markup=get_mentor_menu_keyboard(),
+            )
+        except StudentHasNoProgressError:
+            await callback.message.edit_text(
+                "❌ У ученика нет записи о прогрессе.",
+                reply_markup=get_mentor_menu_keyboard(),
+            )
+        except StageNotFoundError:
+            await callback.message.edit_text(
+                "❌ Выбранный этап не найден.",
+                reply_markup=get_mentor_menu_keyboard(),
+            )
+        except StageNotInDirectionError:
+            await callback.message.edit_text(
+                "❌ Выбранный этап не принадлежит направлению ученика.",
+                reply_markup=get_mentor_menu_keyboard(),
+            )
+        except AlreadyOnThisStageError:
+            await callback.message.edit_text(
+                "ℹ️ Ученик уже находится на этом этапе.",
+                reply_markup=get_mentor_menu_keyboard(),
+            )
+        except ManualStageSelectionError as e:
+            logger.error("Failed to move student to stage manually", error=str(e), exc_info=True)
+            await callback.message.edit_text(
+                "❌ Не удалось перевести ученика на выбранный этап.",
+                reply_markup=get_mentor_menu_keyboard(),
+            )
+        finally:
+            await state.clear()
+
+
+@router.callback_query(MentorStudentViewStates.confirming_manual_stage, F.data.startswith("cancel_manual:"))
+async def handle_cancel_manual_stage(callback: CallbackQuery, state: FSMContext) -> None:
+    """Handle cancellation of manual stage selection."""
     await callback.answer()
 
     student_id = int(callback.data.split(":", 1)[1])

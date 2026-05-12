@@ -8,10 +8,14 @@ from sputnik_offer_crm.services.mentor import (
 )
 from sputnik_offer_crm.services.mentor_progress import (
     AlreadyOnFinalStageError,
+    AlreadyOnThisStageError,
+    ManualStageSelectionError,
     MentorProgressService,
     MoveToNextStageError,
     NextStageInfo,
     NextStageNotFoundError,
+    StageNotFoundError,
+    StageNotInDirectionError,
     StudentHasNoProgressError,
     StudentNotFoundError,
 )
@@ -60,4 +64,8 @@ __all__ = [
     "StudentHasNoProgressError",
     "AlreadyOnFinalStageError",
     "NextStageNotFoundError",
+    "ManualStageSelectionError",
+    "StageNotFoundError",
+    "StageNotInDirectionError",
+    "AlreadyOnThisStageError",
 ]
