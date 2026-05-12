@@ -8,7 +8,6 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from sputnik_offer_crm.models import (
     Direction,
-    DirectionStage,
     Stage,
     Student,
     StudentProgress,
@@ -22,7 +21,7 @@ class StudentProgressInfo(NamedTuple):
 
     student: Student
     direction: Direction
-    current_stage: DirectionStage
+    current_stage: Stage
     progress: StudentProgress
 
 
@@ -76,7 +75,7 @@ class StudentService:
 
         # Get current stage
         result = await self.session.execute(
-            select(DirectionStage).where(DirectionStage.id == progress.current_stage_id)
+            select(Stage).where(Stage.id == progress.current_stage_id)
         )
         current_stage = result.scalar_one()
 

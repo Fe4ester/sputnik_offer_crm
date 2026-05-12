@@ -40,14 +40,14 @@ class TestRegistrationServiceEdgeCases:
         with pytest.raises(InviteCodeAlreadyUsedError):
             await service.validate_and_lock_invite_code(used_invite_code.code)
 
-    async def test_get_direction_first_stage_success(self, db_session, direction, direction_stage):
+    async def test_get_direction_first_stage_success(self, db_session, direction, stage):
         """Test get direction first stage."""
         service = RegistrationService(db_session)
 
         result = await service.get_direction_first_stage(direction.id)
 
-        assert result.id == direction_stage.id
-        assert result.order_index == 0
+        assert result.id == stage.id
+        assert result.stage_number == 1
 
     async def test_get_direction_first_stage_no_stages(self, db_session, direction):
         """Test get direction first stage when no stages exist."""
@@ -57,7 +57,7 @@ class TestRegistrationServiceEdgeCases:
             await service.get_direction_first_stage(direction.id)
 
     async def test_complete_registration_creates_all_entities(
-        self, db_session, invite_code, direction, direction_stage
+        self, db_session, invite_code, direction, stage
     ):
         """Test that complete registration creates student and progress."""
         service = RegistrationService(db_session)
@@ -85,7 +85,7 @@ class TestRegistrationServiceEdgeCases:
         )
         progress = progress_result.scalar_one()
         assert progress.direction_id == direction.id
-        assert progress.current_stage_id == direction_stage.id
+        assert progress.current_stage_id == stage.id
 
         # Verify invite code marked as used
         await db_session.refresh(invite_code)

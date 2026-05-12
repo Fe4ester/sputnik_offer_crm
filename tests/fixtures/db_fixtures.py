@@ -32,22 +32,6 @@ async def direction(db_session) -> Direction:
 
 
 @pytest_asyncio.fixture
-async def direction_stage(db_session, direction) -> DirectionStage:
-    """Create test direction stage."""
-    stage = DirectionStage(
-        direction_id=direction.id,
-        name="Основы Python",
-        order_index=0,
-        is_active=True,
-        is_final=False,
-    )
-    db_session.add(stage)
-    await db_session.commit()
-    await db_session.refresh(stage)
-    return stage
-
-
-@pytest_asyncio.fixture
 async def stage(db_session, direction) -> Stage:
     """Create test stage (db-schema.txt format)."""
     stage = Stage(
@@ -57,6 +41,22 @@ async def stage(db_session, direction) -> Stage:
         description="Изучение базового синтаксиса",
         planned_duration_days=30,
         is_active=True,
+    )
+    db_session.add(stage)
+    await db_session.commit()
+    await db_session.refresh(stage)
+    return stage
+
+
+@pytest_asyncio.fixture
+async def direction_stage(db_session, direction) -> DirectionStage:
+    """Create test direction stage (deprecated, use 'stage' fixture instead)."""
+    stage = DirectionStage(
+        direction_id=direction.id,
+        name="Основы Python",
+        order_index=0,
+        is_active=True,
+        is_final=False,
     )
     db_session.add(stage)
     await db_session.commit()
@@ -132,12 +132,12 @@ async def used_invite_code(db_session, mentor, direction) -> InviteCode:
 
 
 @pytest_asyncio.fixture
-async def student_progress(db_session, student, direction, direction_stage) -> StudentProgress:
+async def student_progress(db_session, student, direction, stage) -> StudentProgress:
     """Create test student progress."""
     progress = StudentProgress(
         student_id=student.id,
         direction_id=direction.id,
-        current_stage_id=direction_stage.id,
+        current_stage_id=stage.id,
         started_at=datetime.now(timezone.utc),
     )
     db_session.add(progress)
