@@ -1,6 +1,6 @@
 """Database fixtures for tests."""
 
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 
 import pytest_asyncio
 
@@ -14,6 +14,7 @@ from sputnik_offer_crm.models import (
     StudentProgress,
     StudentStageProgress,
     StudentTask,
+    WeeklyReport,
 )
 
 
@@ -181,3 +182,19 @@ async def student_task(db_session, student) -> StudentTask:
     await db_session.commit()
     await db_session.refresh(task)
     return task
+
+
+@pytest_asyncio.fixture
+async def weekly_report(db_session, student) -> WeeklyReport:
+    """Create test weekly report."""
+    report = WeeklyReport(
+        student_id=student.id,
+        week_start_date=date(2026, 5, 12),  # Monday
+        answer_what_did="Изучал Python",
+        answer_problems_solved="Решил проблему с async",
+        answer_problems_unsolved=None,
+    )
+    db_session.add(report)
+    await db_session.commit()
+    await db_session.refresh(report)
+    return report

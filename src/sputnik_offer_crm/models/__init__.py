@@ -11,6 +11,7 @@ from sputnik_offer_crm.models.student_stage_progress import (
     StudentStageProgress,
 )
 from sputnik_offer_crm.models.student_task import StudentTask, TaskStatus
+from sputnik_offer_crm.models.weekly_report import WeeklyReport
 
 __all__ = [
     "Direction",
@@ -24,4 +25,5 @@ __all__ = [
     "StudentStageProgress",
     "StudentTask",
     "TaskStatus",
+    "WeeklyReport",
 ]
