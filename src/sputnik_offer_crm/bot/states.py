@@ -17,3 +17,11 @@ class MentorInviteCodeStates(StatesGroup):
 
     selecting_direction = State()
     selecting_timezone = State()
+
+
+class WeeklyReportStates(StatesGroup):
+    """States for student weekly report submission flow."""
+
+    waiting_for_what_did = State()
+    waiting_for_problems_solved = State()
+    waiting_for_problems_unsolved = State()

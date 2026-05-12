@@ -8,8 +8,21 @@ def get_student_menu_keyboard() -> ReplyKeyboardMarkup:
     keyboard = [
         [KeyboardButton(text="📊 Мой прогресс")],
         [KeyboardButton(text="📅 Мои дедлайны")],
+        [KeyboardButton(text="📝 Отправить")],
     ]
     return ReplyKeyboardMarkup(
         keyboard=keyboard,
         resize_keyboard=True,
     )
+
+
+def get_skip_keyboard() -> ReplyKeyboardMarkup:
+    """Get keyboard with skip button."""
+    keyboard = [
+        [KeyboardButton(text="⏭ Пропустить")],
+    ]
+    return ReplyKeyboardMarkup(
+        keyboard=keyboard,
+        resize_keyboard=True,
+    )
+
