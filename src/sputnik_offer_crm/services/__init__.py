@@ -6,6 +6,15 @@ from sputnik_offer_crm.services.mentor import (
     MentorService,
     NoActiveDirectionsError,
 )
+from sputnik_offer_crm.services.mentor_progress import (
+    AlreadyOnFinalStageError,
+    MentorProgressService,
+    MoveToNextStageError,
+    NextStageInfo,
+    NextStageNotFoundError,
+    StudentHasNoProgressError,
+    StudentNotFoundError,
+)
 from sputnik_offer_crm.services.mentor_student import (
     MentorStudentService,
     StudentCardInfo,
@@ -44,4 +53,11 @@ __all__ = [
     "MentorStudentService",
     "StudentSearchResult",
     "StudentCardInfo",
+    "MentorProgressService",
+    "NextStageInfo",
+    "MoveToNextStageError",
+    "StudentNotFoundError",
+    "StudentHasNoProgressError",
+    "AlreadyOnFinalStageError",
+    "NextStageNotFoundError",
 ]
