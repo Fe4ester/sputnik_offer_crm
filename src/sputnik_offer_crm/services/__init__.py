@@ -6,6 +6,24 @@ from sputnik_offer_crm.services.mentor import (
     MentorService,
     NoActiveDirectionsError,
 )
+from sputnik_offer_crm.services.mentor_progress import (
+    AlreadyOnFinalStageError,
+    AlreadyOnThisStageError,
+    ManualStageSelectionError,
+    MentorProgressService,
+    MoveToNextStageError,
+    NextStageInfo,
+    NextStageNotFoundError,
+    StageNotFoundError,
+    StageNotInDirectionError,
+    StudentHasNoProgressError,
+    StudentNotFoundError,
+)
+from sputnik_offer_crm.services.mentor_student import (
+    MentorStudentService,
+    StudentCardInfo,
+    StudentSearchResult,
+)
 from sputnik_offer_crm.services.registration import (
     DirectionHasNoStagesError,
     InviteCodeAlreadyUsedError,
@@ -36,4 +54,18 @@ __all__ = [
     "StudentProgressInfo",
     "DeadlineInfo",
     "WeeklyReportService",
+    "MentorStudentService",
+    "StudentSearchResult",
+    "StudentCardInfo",
+    "MentorProgressService",
+    "NextStageInfo",
+    "MoveToNextStageError",
+    "StudentNotFoundError",
+    "StudentHasNoProgressError",
+    "AlreadyOnFinalStageError",
+    "NextStageNotFoundError",
+    "ManualStageSelectionError",
+    "StageNotFoundError",
+    "StageNotInDirectionError",
+    "AlreadyOnThisStageError",
 ]

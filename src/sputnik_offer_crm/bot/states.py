@@ -19,6 +19,15 @@ class MentorInviteCodeStates(StatesGroup):
     selecting_timezone = State()
 
 
+class MentorStudentViewStates(StatesGroup):
+    """States for mentor student view flow."""
+
+    waiting_for_search_query = State()
+    confirming_next_stage = State()
+    selecting_manual_stage = State()
+    confirming_manual_stage = State()
+
+
 class WeeklyReportStates(StatesGroup):
     """States for student weekly report submission flow."""
 

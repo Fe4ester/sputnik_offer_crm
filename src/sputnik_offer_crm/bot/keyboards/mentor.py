@@ -9,6 +9,7 @@ def get_mentor_menu_keyboard() -> ReplyKeyboardMarkup:
     """Get main menu keyboard for mentor."""
     keyboard = [
         [KeyboardButton(text="➕ Новый код доступа")],
+        [KeyboardButton(text="👤 Найти ученика")],
     ]
     return ReplyKeyboardMarkup(
         keyboard=keyboard,

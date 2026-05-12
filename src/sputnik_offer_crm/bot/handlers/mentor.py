@@ -2,7 +2,7 @@
 
 from aiogram import F, Router
 from aiogram.fsm.context import FSMContext
-from aiogram.types import CallbackQuery, Message
+from aiogram.types import CallbackQuery, Message, InlineKeyboardButton, InlineKeyboardMarkup
 
 from sputnik_offer_crm.bot.keyboards import (
     get_direction_selection_keyboard,
@@ -10,12 +10,22 @@ from sputnik_offer_crm.bot.keyboards import (
     get_timezone_keyboard,
 )
 from sputnik_offer_crm.bot.keyboards.mentor import get_mentor_timezone_fallback_keyboard
-from sputnik_offer_crm.bot.states import MentorInviteCodeStates
+from sputnik_offer_crm.bot.states import MentorInviteCodeStates, MentorStudentViewStates
 from sputnik_offer_crm.db import get_session
 from sputnik_offer_crm.services import (
+    AlreadyOnFinalStageError,
+    AlreadyOnThisStageError,
     InviteCodeGenerationError,
+    ManualStageSelectionError,
     MentorNotFoundError,
+    MentorProgressService,
     MentorService,
+    MentorStudentService,
+    MoveToNextStageError,
+    StageNotFoundError,
+    StageNotInDirectionError,
+    StudentHasNoProgressError,
+    StudentNotFoundError as ProgressStudentNotFoundError,
 )
 from sputnik_offer_crm.utils.logging import get_logger
 
@@ -203,3 +213,658 @@ async def create_invite_code(
             )
         finally:
             await state.clear()
+
+
+@router.message(F.text == "👤 Найти ученика")
+async def start_student_search(message: Message, state: FSMContext) -> None:
+    """Start student search flow."""
+    async with get_session() as session:
+        service = MentorService(session)
+
+        try:
+            await service.check_mentor_access(message.from_user.id)
+        except MentorNotFoundError:
+            await message.answer("❌ Доступ запрещён. Вы не являетесь ментором.")
+            return
+
+        await message.answer(
+            "🔍 Поиск ученика\n\n"
+            "Введите для поиска:\n"
+            "• Telegram username (с @ или без)\n"
+            "• Имя или фамилию\n"
+            "• Telegram ID"
+        )
+        await state.set_state(MentorStudentViewStates.waiting_for_search_query)
+
+
+@router.message(MentorStudentViewStates.waiting_for_search_query)
+async def process_student_search(message: Message, state: FSMContext) -> None:
+    """Process student search query."""
+    if not message.text:
+        await message.answer("Пожалуйста, отправьте текстовое сообщение.")
+        return
+
+    query = message.text.strip()
+
+    async with get_session() as session:
+        service = MentorStudentService(session)
+        results = await service.search_students(query)
+
+        if not results:
+            await message.answer(
+                f"❌ Ученики не найдены по запросу: {query}\n\n"
+                "Попробуйте другой запрос или проверьте правильность ввода.",
+                reply_markup=get_mentor_menu_keyboard(),
+            )
+            await state.clear()
+            return
+
+        if len(results) == 1:
+            # Single result - show card immediately
+            await state.clear()
+            await show_student_card(message, results[0].student.id)
+            return
+
+        # Multiple results - show selection
+        buttons = []
+        for result in results:
+            student = result.student
+            display_name = f"{student.first_name}"
+            if student.last_name:
+                display_name += f" {student.last_name}"
+            if student.username:
+                display_name += f" (@{student.username})"
+            if result.direction_name:
+                display_name += f" — {result.direction_name}"
+
+            buttons.append([
+                InlineKeyboardButton(
+                    text=display_name,
+                    callback_data=f"student:{student.id}"
+                )
+            ])
+
+        buttons.append([
+            InlineKeyboardButton(text="❌ Отмена", callback_data="cancel_search")
+        ])
+
+        await message.answer(
+            f"🔍 Найдено учеников: {len(results)}\n\n"
+            "Выберите ученика:",
+            reply_markup=InlineKeyboardMarkup(inline_keyboard=buttons),
+        )
+        await state.clear()
+
+
+@router.callback_query(F.data.startswith("student:"))
+async def handle_student_selection(callback: CallbackQuery) -> None:
+    """Handle student selection from search results."""
+    await callback.answer()
+
+    student_id = int(callback.data.split(":", 1)[1])
+    await callback.message.delete()
+    await show_student_card(callback.message, student_id)
+
+
+@router.callback_query(F.data == "cancel_search")
+async def handle_search_cancel(callback: CallbackQuery) -> None:
+    """Handle search cancellation."""
+    await callback.answer()
+    await callback.message.edit_text("❌ Поиск отменён.")
+
+
+async def show_student_card(message: Message, student_id: int) -> None:
+    """Show student card to mentor."""
+    async with get_session() as session:
+        service = MentorStudentService(session)
+        card = await service.get_student_card(student_id)
+
+        if not card:
+            await message.answer(
+                "❌ Информация об ученике не найдена.",
+                reply_markup=get_mentor_menu_keyboard(),
+            )
+            return
+
+        # Build card text
+        lines = ["👤 Карточка ученика\n"]
+
+        # Basic info
+        lines.append(f"📛 Имя: {card.student.first_name}")
+        if card.student.last_name:
+            lines.append(f"   Фамилия: {card.student.last_name}")
+        if card.student.username:
+            lines.append(f"💬 Username: @{card.student.username}")
+        lines.append(f"🆔 Telegram ID: {card.student.telegram_id}")
+        lines.append("")
+
+        # Progress info
+        lines.append(f"📚 Направление: {card.direction.name}")
+        lines.append(f"📍 Текущий этап: {card.current_stage.title}")
+        started_date = card.progress.started_at.strftime("%d.%m.%Y")
+        lines.append(f"📅 Дата старта: {started_date}")
+        lines.append(f"🌍 Часовой пояс: {card.student.timezone}")
+        status_emoji = "✅" if card.student.is_active else "⏸"
+        status_text = "Активен" if card.student.is_active else "Неактивен"
+        lines.append(f"{status_emoji} Статус: {status_text}")
+        lines.append("")
+
+        # Deadlines
+        if card.deadlines:
+            lines.append("📅 Ближайшие дедлайны:")
+            for deadline in card.deadlines[:5]:  # Show max 5
+                status_emoji = "⚠️" if deadline.is_overdue else "📌"
+                date_str = deadline.deadline_date.strftime("%d.%m.%Y")
+                lines.append(f"{status_emoji} {deadline.title}")
+                lines.append(f"   Срок: {date_str}")
+                if deadline.is_overdue:
+                    lines.append("   (просрочен)")
+            lines.append("")
+        else:
+            lines.append("📅 Дедлайны: не назначены\n")
+
+        # Weekly reports
+        if card.recent_reports:
+            lines.append("📝 Последние отчёты:")
+            for report in card.recent_reports:
+                week_str = report.week_start_date.strftime("%d.%m.%Y")
+                lines.append(f"\n📅 Неделя с {week_str}:")
+
+                # Truncate long answers
+                what_did = report.answer_what_did
+                if len(what_did) > 150:
+                    what_did = what_did[:150] + "..."
+                lines.append(f"• Что делал: {what_did}")
+
+                if report.answer_problems_solved:
+                    solved = report.answer_problems_solved
+                    if len(solved) > 100:
+                        solved = solved[:100] + "..."
+                    lines.append(f"• Решённые проблемы: {solved}")
+
+                if report.answer_problems_unsolved:
+                    unsolved = report.answer_problems_unsolved
+                    if len(unsolved) > 100:
+                        unsolved = unsolved[:100] + "..."
+                    lines.append(f"• Нужна помощь: {unsolved}")
+        else:
+            lines.append("📝 Отчёты: пока не отправлялись")
+
+        # Add action buttons
+        buttons = [
+            [
+                InlineKeyboardButton(
+                    text="➡️ Перевести на следующий этап",
+                    callback_data=f"move_next:{student_id}"
+                )
+            ],
+            [
+                InlineKeyboardButton(
+                    text="🎯 Выбрать этап вручную",
+                    callback_data=f"select_stage:{student_id}"
+                )
+            ],
+        ]
+
+        await message.answer(
+            "\n".join(lines),
+            reply_markup=InlineKeyboardMarkup(inline_keyboard=buttons),
+        )
+
+        logger.info(
+            "Mentor viewed student card",
+            mentor_id=message.from_user.id,
+            student_id=student_id,
+        )
+
+
+@router.callback_query(F.data.startswith("move_next:"))
+async def handle_move_to_next_stage_request(callback: CallbackQuery, state: FSMContext) -> None:
+    """Handle request to move student to next stage."""
+    await callback.answer()
+
+    student_id = int(callback.data.split(":", 1)[1])
+
+    async with get_session() as session:
+        # Check mentor access
+        mentor_service = MentorService(session)
+        try:
+            await mentor_service.check_mentor_access(callback.from_user.id)
+        except MentorNotFoundError:
+            await callback.message.edit_text("❌ Доступ запрещён. Вы не являетесь ментором.")
+            return
+
+        # Get next stage info
+        progress_service = MentorProgressService(session)
+        try:
+            info = await progress_service.get_next_stage_info(student_id)
+        except ProgressStudentNotFoundError:
+            await callback.message.edit_text(
+                "❌ Ученик не найден.",
+                reply_markup=get_mentor_menu_keyboard(),
+            )
+            return
+        except StudentHasNoProgressError:
+            await callback.message.edit_text(
+                "❌ У ученика нет записи о прогрессе.",
+                reply_markup=get_mentor_menu_keyboard(),
+            )
+            return
+        except AlreadyOnFinalStageError:
+            await callback.message.edit_text(
+                "ℹ️ Ученик уже находится на финальном этапе.\n\n"
+                f"Текущий этап: {info.current_stage.title if 'info' in locals() else 'неизвестен'}",
+                reply_markup=get_mentor_menu_keyboard(),
+            )
+            return
+        except MoveToNextStageError as e:
+            logger.error("Failed to get next stage info", error=str(e))
+            await callback.message.edit_text(
+                "❌ Не удалось получить информацию о следующем этапе.",
+                reply_markup=get_mentor_menu_keyboard(),
+            )
+            return
+
+        # Show confirmation
+        student_name = info.student.first_name
+        if info.student.last_name:
+            student_name += f" {info.student.last_name}"
+
+        confirmation_text = (
+            f"➡️ Перевод на следующий этап\n\n"
+            f"👤 Ученик: {student_name}\n\n"
+            f"📍 Текущий этап:\n{info.current_stage.title}\n\n"
+            f"➡️ Следующий этап:\n{info.next_stage.title}\n\n"
+            f"Подтвердите перевод:"
+        )
+
+        buttons = [
+            [
+                InlineKeyboardButton(text="✅ Подтвердить", callback_data=f"confirm_move:{student_id}"),
+                InlineKeyboardButton(text="❌ Отмена", callback_data=f"cancel_move:{student_id}"),
+            ]
+        ]
+
+        await callback.message.edit_text(
+            confirmation_text,
+            reply_markup=InlineKeyboardMarkup(inline_keyboard=buttons),
+        )
+
+        # Store student_id in state for confirmation
+        await state.update_data(student_id=student_id)
+        await state.set_state(MentorStudentViewStates.confirming_next_stage)
+
+
+@router.callback_query(MentorStudentViewStates.confirming_next_stage, F.data.startswith("confirm_move:"))
+async def handle_confirm_move_to_next_stage(callback: CallbackQuery, state: FSMContext) -> None:
+    """Handle confirmation of move to next stage."""
+    await callback.answer()
+
+    student_id = int(callback.data.split(":", 1)[1])
+
+    async with get_session() as session:
+        # Check mentor access
+        mentor_service = MentorService(session)
+        try:
+            await mentor_service.check_mentor_access(callback.from_user.id)
+        except MentorNotFoundError:
+            await callback.message.edit_text("❌ Доступ запрещён.")
+            await state.clear()
+            return
+
+        # Perform the move
+        progress_service = MentorProgressService(session)
+        try:
+            next_stage = await progress_service.move_to_next_stage(student_id)
+
+            await callback.message.edit_text(
+                f"✅ Ученик успешно переведён на следующий этап!\n\n"
+                f"➡️ Новый этап: {next_stage.title}"
+            )
+
+            logger.info(
+                "Student moved to next stage",
+                mentor_id=callback.from_user.id,
+                student_id=student_id,
+                new_stage_id=next_stage.id,
+            )
+
+            # Show updated card
+            await show_student_card(callback.message, student_id)
+
+        except ProgressStudentNotFoundError:
+            await callback.message.edit_text(
+                "❌ Ученик не найден.",
+                reply_markup=get_mentor_menu_keyboard(),
+            )
+        except StudentHasNoProgressError:
+            await callback.message.edit_text(
+                "❌ У ученика нет записи о прогрессе.",
+                reply_markup=get_mentor_menu_keyboard(),
+            )
+        except AlreadyOnFinalStageError:
+            await callback.message.edit_text(
+                "ℹ️ Ученик уже находится на финальном этапе.",
+                reply_markup=get_mentor_menu_keyboard(),
+            )
+        except MoveToNextStageError as e:
+            logger.error("Failed to move student to next stage", error=str(e), exc_info=True)
+            await callback.message.edit_text(
+                "❌ Не удалось перевести ученика на следующий этап.",
+                reply_markup=get_mentor_menu_keyboard(),
+            )
+        finally:
+            await state.clear()
+
+
+@router.callback_query(MentorStudentViewStates.confirming_next_stage, F.data.startswith("cancel_move:"))
+async def handle_cancel_move_to_next_stage(callback: CallbackQuery, state: FSMContext) -> None:
+    """Handle cancellation of move to next stage."""
+    await callback.answer()
+
+    student_id = int(callback.data.split(":", 1)[1])
+
+    await callback.message.edit_text("❌ Перевод отменён.")
+    await state.clear()
+
+    # Show card again
+    await show_student_card(callback.message, student_id)
+
+
+@router.callback_query(F.data.startswith("select_stage:"))
+async def handle_select_stage_request(callback: CallbackQuery, state: FSMContext) -> None:
+    """Handle request to select stage manually."""
+    await callback.answer()
+
+    student_id = int(callback.data.split(":", 1)[1])
+
+    async with get_session() as session:
+        # Check mentor access
+        mentor_service = MentorService(session)
+        try:
+            await mentor_service.check_mentor_access(callback.from_user.id)
+        except MentorNotFoundError:
+            await callback.message.edit_text("❌ Доступ запрещён. Вы не являетесь ментором.")
+            return
+
+        # Get available stages
+        progress_service = MentorProgressService(session)
+        try:
+            stages = await progress_service.get_available_stages(student_id)
+        except ProgressStudentNotFoundError:
+            await callback.message.edit_text(
+                "❌ Ученик не найден.",
+                reply_markup=get_mentor_menu_keyboard(),
+            )
+            return
+        except StudentHasNoProgressError:
+            await callback.message.edit_text(
+                "❌ У ученика нет записи о прогрессе.",
+                reply_markup=get_mentor_menu_keyboard(),
+            )
+            return
+        except Exception as e:
+            logger.error("Failed to get available stages", error=str(e))
+            await callback.message.edit_text(
+                "❌ Не удалось получить список этапов.",
+                reply_markup=get_mentor_menu_keyboard(),
+            )
+            return
+
+        if not stages:
+            await callback.message.edit_text(
+                "❌ Нет доступных этапов в направлении ученика.",
+                reply_markup=get_mentor_menu_keyboard(),
+            )
+            return
+
+        # Show stage selection
+        buttons = []
+        for stage in stages:
+            buttons.append([
+                InlineKeyboardButton(
+                    text=f"{stage.stage_number}. {stage.title}",
+                    callback_data=f"stage:{student_id}:{stage.id}"
+                )
+            ])
+
+        buttons.append([
+            InlineKeyboardButton(text="❌ Отмена", callback_data=f"cancel_select:{student_id}")
+        ])
+
+        await callback.message.edit_text(
+            "🎯 Выбор этапа вручную\n\n"
+            "Выберите этап для ученика:",
+            reply_markup=InlineKeyboardMarkup(inline_keyboard=buttons),
+        )
+
+        await state.update_data(student_id=student_id)
+        await state.set_state(MentorStudentViewStates.selecting_manual_stage)
+
+
+@router.callback_query(MentorStudentViewStates.selecting_manual_stage, F.data.startswith("stage:"))
+async def handle_stage_selection(callback: CallbackQuery, state: FSMContext) -> None:
+    """Handle stage selection."""
+    await callback.answer()
+
+    parts = callback.data.split(":", 2)
+    student_id = int(parts[1])
+    stage_id = int(parts[2])
+
+    async with get_session() as session:
+        # Check mentor access
+        mentor_service = MentorService(session)
+        try:
+            await mentor_service.check_mentor_access(callback.from_user.id)
+        except MentorNotFoundError:
+            await callback.message.edit_text("❌ Доступ запрещён.")
+            await state.clear()
+            return
+
+        # Get stage info and student info
+        progress_service = MentorProgressService(session)
+        from sputnik_offer_crm.models import Stage, Student, StudentProgress
+        from sqlalchemy import select
+
+        try:
+            # Get student
+            result = await session.execute(
+                select(Student).where(Student.id == student_id)
+            )
+            student = result.scalar_one_or_none()
+
+            if not student:
+                await callback.message.edit_text(
+                    "❌ Ученик не найден.",
+                    reply_markup=get_mentor_menu_keyboard(),
+                )
+                await state.clear()
+                return
+
+            # Get student progress
+            result = await session.execute(
+                select(StudentProgress).where(StudentProgress.student_id == student_id)
+            )
+            progress = result.scalar_one_or_none()
+
+            if not progress:
+                await callback.message.edit_text(
+                    "❌ У ученика нет записи о прогрессе.",
+                    reply_markup=get_mentor_menu_keyboard(),
+                )
+                await state.clear()
+                return
+
+            # Get current stage
+            result = await session.execute(
+                select(Stage).where(Stage.id == progress.current_stage_id)
+            )
+            current_stage = result.scalar_one()
+
+            # Get target stage
+            result = await session.execute(
+                select(Stage).where(Stage.id == stage_id)
+            )
+            target_stage = result.scalar_one_or_none()
+
+            if not target_stage:
+                await callback.message.edit_text(
+                    "❌ Выбранный этап не найден.",
+                    reply_markup=get_mentor_menu_keyboard(),
+                )
+                await state.clear()
+                return
+
+            # Check if already on this stage
+            if progress.current_stage_id == stage_id:
+                await callback.message.edit_text(
+                    f"ℹ️ Ученик уже находится на этом этапе.\n\n"
+                    f"Текущий этап: {current_stage.title}",
+                    reply_markup=get_mentor_menu_keyboard(),
+                )
+                await state.clear()
+                return
+
+            # Show confirmation
+            student_name = student.first_name
+            if student.last_name:
+                student_name += f" {student.last_name}"
+
+            confirmation_text = (
+                f"🎯 Ручной выбор этапа\n\n"
+                f"👤 Ученик: {student_name}\n\n"
+                f"📍 Текущий этап:\n{current_stage.title}\n\n"
+                f"➡️ Новый этап:\n{target_stage.title}\n\n"
+                f"Подтвердите перевод:"
+            )
+
+            buttons = [
+                [
+                    InlineKeyboardButton(
+                        text="✅ Подтвердить",
+                        callback_data=f"confirm_manual:{student_id}:{stage_id}"
+                    ),
+                    InlineKeyboardButton(
+                        text="❌ Отмена",
+                        callback_data=f"cancel_manual:{student_id}"
+                    ),
+                ]
+            ]
+
+            await callback.message.edit_text(
+                confirmation_text,
+                reply_markup=InlineKeyboardMarkup(inline_keyboard=buttons),
+            )
+
+            await state.update_data(student_id=student_id, stage_id=stage_id)
+            await state.set_state(MentorStudentViewStates.confirming_manual_stage)
+
+        except Exception as e:
+            logger.error("Failed to prepare stage selection confirmation", error=str(e), exc_info=True)
+            await callback.message.edit_text(
+                "❌ Произошла ошибка при подготовке подтверждения.",
+                reply_markup=get_mentor_menu_keyboard(),
+            )
+            await state.clear()
+
+
+@router.callback_query(MentorStudentViewStates.selecting_manual_stage, F.data.startswith("cancel_select:"))
+async def handle_cancel_stage_selection(callback: CallbackQuery, state: FSMContext) -> None:
+    """Handle cancellation of stage selection."""
+    await callback.answer()
+
+    student_id = int(callback.data.split(":", 1)[1])
+
+    await callback.message.edit_text("❌ Выбор этапа отменён.")
+    await state.clear()
+
+    # Show card again
+    await show_student_card(callback.message, student_id)
+
+
+@router.callback_query(MentorStudentViewStates.confirming_manual_stage, F.data.startswith("confirm_manual:"))
+async def handle_confirm_manual_stage(callback: CallbackQuery, state: FSMContext) -> None:
+    """Handle confirmation of manual stage selection."""
+    await callback.answer()
+
+    parts = callback.data.split(":", 2)
+    student_id = int(parts[1])
+    stage_id = int(parts[2])
+
+    async with get_session() as session:
+        # Check mentor access
+        mentor_service = MentorService(session)
+        try:
+            await mentor_service.check_mentor_access(callback.from_user.id)
+        except MentorNotFoundError:
+            await callback.message.edit_text("❌ Доступ запрещён.")
+            await state.clear()
+            return
+
+        # Perform the move
+        progress_service = MentorProgressService(session)
+        try:
+            target_stage = await progress_service.move_to_stage(student_id, stage_id)
+
+            await callback.message.edit_text(
+                f"✅ Ученик успешно переведён на выбранный этап!\n\n"
+                f"➡️ Новый этап: {target_stage.title}"
+            )
+
+            logger.info(
+                "Student moved to stage manually",
+                mentor_id=callback.from_user.id,
+                student_id=student_id,
+                new_stage_id=target_stage.id,
+            )
+
+            # Show updated card
+            await show_student_card(callback.message, student_id)
+
+        except ProgressStudentNotFoundError:
+            await callback.message.edit_text(
+                "❌ Ученик не найден.",
+                reply_markup=get_mentor_menu_keyboard(),
+            )
+        except StudentHasNoProgressError:
+            await callback.message.edit_text(
+                "❌ У ученика нет записи о прогрессе.",
+                reply_markup=get_mentor_menu_keyboard(),
+            )
+        except StageNotFoundError:
+            await callback.message.edit_text(
+                "❌ Выбранный этап не найден.",
+                reply_markup=get_mentor_menu_keyboard(),
+            )
+        except StageNotInDirectionError:
+            await callback.message.edit_text(
+                "❌ Выбранный этап не принадлежит направлению ученика.",
+                reply_markup=get_mentor_menu_keyboard(),
+            )
+        except AlreadyOnThisStageError:
+            await callback.message.edit_text(
+                "ℹ️ Ученик уже находится на этом этапе.",
+                reply_markup=get_mentor_menu_keyboard(),
+            )
+        except ManualStageSelectionError as e:
+            logger.error("Failed to move student to stage manually", error=str(e), exc_info=True)
+            await callback.message.edit_text(
+                "❌ Не удалось перевести ученика на выбранный этап.",
+                reply_markup=get_mentor_menu_keyboard(),
+            )
+        finally:
+            await state.clear()
+
+
+@router.callback_query(MentorStudentViewStates.confirming_manual_stage, F.data.startswith("cancel_manual:"))
+async def handle_cancel_manual_stage(callback: CallbackQuery, state: FSMContext) -> None:
+    """Handle cancellation of manual stage selection."""
+    await callback.answer()
+
+    student_id = int(callback.data.split(":", 1)[1])
+
+    await callback.message.edit_text("❌ Перевод отменён.")
+    await state.clear()
+
+    # Show card again
+    await show_student_card(callback.message, student_id)
