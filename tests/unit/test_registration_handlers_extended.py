@@ -113,7 +113,7 @@ class TestCompleteRegistration:
 
     @patch("sputnik_offer_crm.bot.handlers.registration.get_session")
     async def test_complete_registration_success(
-        self, mock_get_session, mock_callback, mock_state, db_session, invite_code, direction_stage
+        self, mock_get_session, mock_callback, mock_state, db_session, invite_code, stage
     ):
         """Test successful registration completion."""
         mock_get_session.return_value.__aenter__.return_value = db_session

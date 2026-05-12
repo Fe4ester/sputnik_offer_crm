@@ -8,8 +8,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from sputnik_offer_crm.models import (
     Direction,
-    DirectionStage,
     InviteCode,
+    Stage,
     Student,
     StudentProgress,
 )
@@ -44,7 +44,7 @@ class RegistrationResult(NamedTuple):
 
     student: Student
     direction: Direction
-    first_stage: DirectionStage
+    first_stage: Stage
 
 
 class RegistrationService:
@@ -107,20 +107,20 @@ class RegistrationService:
 
         return invite_code
 
-    async def get_direction_first_stage(self, direction_id: int) -> DirectionStage:
+    async def get_direction_first_stage(self, direction_id: int) -> Stage:
         """
-        Get first stage of direction by order_index.
+        Get first stage of direction by stage_number.
 
         Raises:
             DirectionHasNoStagesError: Direction has no stages
         """
         result = await self.session.execute(
-            select(DirectionStage)
+            select(Stage)
             .where(
-                DirectionStage.direction_id == direction_id,
-                DirectionStage.is_active == True,  # noqa: E712
+                Stage.direction_id == direction_id,
+                Stage.is_active == True,  # noqa: E712
             )
-            .order_by(DirectionStage.order_index)
+            .order_by(Stage.stage_number)
             .limit(1)
         )
         first_stage = result.scalar_one_or_none()

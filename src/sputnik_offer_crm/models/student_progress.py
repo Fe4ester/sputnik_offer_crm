@@ -2,7 +2,7 @@
 
 from datetime import datetime
 
-from sqlalchemy import DateTime, ForeignKey, ForeignKeyConstraint, UniqueConstraint
+from sqlalchemy import DateTime, ForeignKey, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column
 
 from sputnik_offer_crm.db.base import Base
@@ -15,12 +15,6 @@ class StudentProgress(Base, TimestampMixin):
     __tablename__ = "student_progress"
     __table_args__ = (
         UniqueConstraint("student_id", "direction_id", name="uq_student_direction"),
-        ForeignKeyConstraint(
-            ["direction_id", "current_stage_id"],
-            ["direction_stages.direction_id", "direction_stages.id"],
-            ondelete="RESTRICT",
-            name="fk_student_progress_direction_stage",
-        ),
     )
 
     id: Mapped[int] = mapped_column(primary_key=True)
@@ -35,6 +29,7 @@ class StudentProgress(Base, TimestampMixin):
         index=True,
     )
     current_stage_id: Mapped[int] = mapped_column(
+        ForeignKey("stages.id", ondelete="RESTRICT"),
         nullable=False,
         index=True,
     )

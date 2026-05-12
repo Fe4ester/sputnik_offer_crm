@@ -14,7 +14,7 @@ class TestStudentService:
     """Test student service."""
 
     async def test_get_student_progress_success(
-        self, db_session, student, direction, direction_stage, student_progress
+        self, db_session, student, direction, stage, student_progress
     ):
         """Test get student progress success."""
         service = StudentService(db_session)
@@ -24,7 +24,7 @@ class TestStudentService:
         assert result is not None
         assert result.student.id == student.id
         assert result.direction.id == direction.id
-        assert result.current_stage.id == direction_stage.id
+        assert result.current_stage.id == stage.id
         assert result.progress.id == student_progress.id
 
     async def test_get_student_progress_student_not_found(self, db_session):

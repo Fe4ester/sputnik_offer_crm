@@ -52,3 +52,6 @@ Thumbs.db
 
 # Alembic
 alembic/versions/*.pyc
+
+# Pytest
+/.coverage

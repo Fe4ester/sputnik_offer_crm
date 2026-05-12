@@ -241,7 +241,7 @@ async def complete_registration(
             await callback.message.edit_text(
                 f"🎉 Регистрация завершена!\n\n"
                 f"Направление: {registration_result.direction.name}\n"
-                f"Текущий этап: {registration_result.first_stage.name}\n"
+                f"Текущий этап: {registration_result.first_stage.title}\n"
                 f"Часовой пояс: {timezone_str}\n\n"
                 f"Добро пожаловать в Sputnik Offer CRM!"
             )

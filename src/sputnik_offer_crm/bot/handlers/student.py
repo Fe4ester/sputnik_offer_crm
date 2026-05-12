@@ -41,7 +41,7 @@ async def show_my_progress(message: Message) -> None:
         await message.answer(
             f"📊 Ваш прогресс\n\n"
             f"📚 Направление: {progress_info.direction.name}\n"
-            f"📍 Текущий этап: {progress_info.current_stage.name}\n"
+            f"📍 Текущий этап: {progress_info.current_stage.title}\n"
             f"📅 Дата старта: {started_date}\n"
             f"🌍 Часовой пояс: {progress_info.student.timezone}\n\n"
             f"Продолжайте в том же духе! 💪"

@@ -60,7 +60,7 @@ class TestRegistrationService:
         assert result is None
 
     async def test_complete_registration_success(
-        self, db_session, invite_code, direction, direction_stage
+        self, db_session, invite_code, direction, stage
     ):
         """Test successful registration."""
         service = RegistrationService(db_session)
@@ -78,7 +78,7 @@ class TestRegistrationService:
         assert result.student.first_name == "Тест"
         assert result.student.timezone == "Europe/Moscow"
         assert result.direction.id == direction.id
-        assert result.first_stage.id == direction_stage.id
+        assert result.first_stage.id == stage.id
 
         # Check invite code marked as used
         await db_session.refresh(invite_code)
@@ -133,7 +133,7 @@ class TestRegistrationService:
             )
 
     async def test_complete_registration_without_last_name(
-        self, db_session, invite_code, direction_stage
+        self, db_session, invite_code, stage
     ):
         """Test registration without last name."""
         service = RegistrationService(db_session)
@@ -150,7 +150,7 @@ class TestRegistrationService:
         assert result.student.last_name is None
 
     async def test_complete_registration_without_username(
-        self, db_session, invite_code, direction_stage
+        self, db_session, invite_code, stage
     ):
         """Test registration without username."""
         service = RegistrationService(db_session)
