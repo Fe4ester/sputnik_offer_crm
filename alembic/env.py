@@ -21,8 +21,11 @@ from sputnik_offer_crm.models import (  # noqa: F401
     DirectionStage,
     InviteCode,
     Mentor,
+    Stage,
     Student,
     StudentProgress,
+    StudentStageProgress,
+    StudentTask,
 )
 
 # this is the Alembic Config object, which provides

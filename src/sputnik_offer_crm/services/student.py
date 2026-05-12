@@ -1,11 +1,20 @@
 """Student service."""
 
+from datetime import date, datetime, timezone
 from typing import NamedTuple
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from sputnik_offer_crm.models import Direction, DirectionStage, Student, StudentProgress
+from sputnik_offer_crm.models import (
+    Direction,
+    DirectionStage,
+    Stage,
+    Student,
+    StudentProgress,
+    StudentStageProgress,
+    StudentTask,
+)
 
 
 class StudentProgressInfo(NamedTuple):
@@ -15,6 +24,17 @@ class StudentProgressInfo(NamedTuple):
     direction: Direction
     current_stage: DirectionStage
     progress: StudentProgress
+
+
+class DeadlineInfo(NamedTuple):
+    """Deadline information."""
+
+    deadline_type: str  # "stage" or "task"
+    title: str
+    deadline_date: date
+    is_overdue: bool
+    stage_name: str | None = None  # For stage deadlines
+    task_id: int | None = None  # For task deadlines
 
 
 class StudentService:
@@ -67,16 +87,71 @@ class StudentService:
             progress=progress,
         )
 
-    async def get_student_deadlines(self, telegram_id: int) -> list:
+    async def get_student_deadlines(self, telegram_id: int) -> list[DeadlineInfo]:
         """
-        Get student deadlines.
-
-        Currently returns empty list as deadline functionality is not yet implemented.
-        This is a placeholder for future deadline management.
+        Get student deadlines from stage progress and tasks.
 
         Returns:
-            List of deadlines (empty for now)
+            List of DeadlineInfo sorted by deadline date
         """
-        # Placeholder: deadline functionality not yet implemented
-        # When implemented, this will query deadline-related tables
-        return []
+        # Get student
+        result = await self.session.execute(
+            select(Student).where(Student.telegram_id == telegram_id)
+        )
+        student = result.scalar_one_or_none()
+
+        if not student:
+            return []
+
+        deadlines: list[DeadlineInfo] = []
+        today = date.today()
+
+        # Get stage deadlines (from db-schema.txt stages table)
+        result = await self.session.execute(
+            select(StudentStageProgress, Stage)
+            .join(Stage, StudentStageProgress.stage_id == Stage.id)
+            .where(
+                StudentStageProgress.student_id == student.id,
+                StudentStageProgress.planned_deadline.is_not(None),
+            )
+        )
+        stage_progress_rows = result.all()
+
+        for stage_progress, stage in stage_progress_rows:
+            if stage_progress.planned_deadline:
+                deadlines.append(
+                    DeadlineInfo(
+                        deadline_type="stage",
+                        title=f"Этап: {stage.title}",
+                        deadline_date=stage_progress.planned_deadline,
+                        is_overdue=stage_progress.planned_deadline < today,
+                        stage_name=stage.title,
+                    )
+                )
+
+        # Get task deadlines
+        result = await self.session.execute(
+            select(StudentTask).where(
+                StudentTask.student_id == student.id,
+                StudentTask.deadline.is_not(None),
+                StudentTask.completed_at.is_(None),  # Only incomplete tasks
+            )
+        )
+        tasks = result.scalars().all()
+
+        for task in tasks:
+            if task.deadline:
+                deadlines.append(
+                    DeadlineInfo(
+                        deadline_type="task",
+                        title=task.title,
+                        deadline_date=task.deadline,
+                        is_overdue=task.deadline < today,
+                        task_id=task.id,
+                    )
+                )
+
+        # Sort by deadline date
+        deadlines.sort(key=lambda d: d.deadline_date)
+
+        return deadlines

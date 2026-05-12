@@ -1,10 +1,16 @@
 """Student model."""
 
+from typing import TYPE_CHECKING
+
 from sqlalchemy import BigInteger, String
-from sqlalchemy.orm import Mapped, mapped_column
+from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from sputnik_offer_crm.db.base import Base
 from sputnik_offer_crm.models.base import TimestampMixin
+
+if TYPE_CHECKING:
+    from sputnik_offer_crm.models.student_stage_progress import StudentStageProgress
+    from sputnik_offer_crm.models.student_task import StudentTask
 
 
 class Student(Base, TimestampMixin):
@@ -24,6 +30,14 @@ class Student(Base, TimestampMixin):
     username: Mapped[str | None] = mapped_column(String(255), nullable=True)
     timezone: Mapped[str] = mapped_column(String(50), nullable=False)
     is_active: Mapped[bool] = mapped_column(default=True, nullable=False)
+
+    # Relationships
+    stage_progress: Mapped[list["StudentStageProgress"]] = relationship(
+        back_populates="student", cascade="all, delete-orphan"
+    )
+    tasks: Mapped[list["StudentTask"]] = relationship(
+        back_populates="student", cascade="all, delete-orphan"
+    )
 
     def __repr__(self) -> str:
         return f"<Student(id={self.id}, telegram_id={self.telegram_id}, timezone={self.timezone})>"

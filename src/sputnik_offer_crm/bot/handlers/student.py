@@ -63,5 +63,24 @@ async def show_my_deadlines(message: Message) -> None:
             )
             return
 
-        # Future implementation: format and display deadlines
-        # For now, this branch won't be reached as get_student_deadlines returns []
+        # Format deadlines
+        lines = ["📅 Ваши дедлайны\n"]
+
+        for deadline in deadlines:
+            # Format date
+            deadline_str = deadline.deadline_date.strftime("%d.%m.%Y")
+
+            # Status indicator
+            if deadline.is_overdue:
+                status = "🔴"
+            else:
+                status = "🟢"
+
+            # Type indicator
+            type_icon = "📍" if deadline.deadline_type == "stage" else "📝"
+
+            lines.append(f"{status} {type_icon} {deadline.title}")
+            lines.append(f"   Дедлайн: {deadline_str}")
+            lines.append("")
+
+        await message.answer("\n".join(lines))
