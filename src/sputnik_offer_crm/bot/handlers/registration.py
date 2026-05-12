@@ -36,18 +36,32 @@ async def show_student_menu(message: Message) -> None:
 
 @router.message(CommandStart())
 async def cmd_start(message: Message, state: FSMContext, command: CommandObject) -> None:
-    """Handle /start command with optional invite code."""
-    # Check if student already registered
+    """Handle /start command with role-based routing."""
     async with get_session() as session:
-        service = RegistrationService(session)
-        existing_student = await service.check_student_exists(message.from_user.id)
+        from sputnik_offer_crm.services import MentorService
+
+        # Check if user is a mentor
+        mentor_service = MentorService(session)
+        mentor = await mentor_service.get_mentor(message.from_user.id)
+
+        if mentor and mentor.is_active:
+            # User is a mentor - show mentor menu
+            from sputnik_offer_crm.bot.handlers.mentor import show_mentor_menu
+            await show_mentor_menu(message)
+            await state.clear()
+            return
+
+        # Check if user is a student
+        student_service = RegistrationService(session)
+        existing_student = await student_service.check_student_exists(message.from_user.id)
 
         if existing_student:
+            # User is a student - show student menu
             await show_student_menu(message)
             await state.clear()
             return
 
-    # Check for invite code in command args
+    # User is a guest - start registration flow
     if command.args:
         invite_code = command.args.strip()
         await process_invite_code(message, state, invite_code)

@@ -10,3 +10,10 @@ class RegistrationStates(StatesGroup):
     waiting_for_timezone = State()
     waiting_for_local_time = State()
     confirming_timezone = State()
+
+
+class MentorInviteCodeStates(StatesGroup):
+    """States for mentor invite code creation flow."""
+
+    selecting_direction = State()
+    selecting_timezone = State()
