@@ -14,6 +14,11 @@ from sputnik_offer_crm.services.registration import (
     RegistrationResult,
     RegistrationService,
 )
+from sputnik_offer_crm.services.student import (
+    DeadlineInfo,
+    StudentProgressInfo,
+    StudentService,
+)
 
 __all__ = [
     "RegistrationService",
@@ -26,4 +31,7 @@ __all__ = [
     "MentorNotFoundError",
     "NoActiveDirectionsError",
     "InviteCodeGenerationError",
+    "StudentService",
+    "StudentProgressInfo",
+    "DeadlineInfo",
 ]
