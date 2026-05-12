@@ -1,0 +1,280 @@
+Student Progress Database Schema
+
+ENUMS
+-----
+
+student_status:
+- active
+- paused
+- dropped
+
+daily_status:
+- active
+- paused
+- no_response
+- dropped
+
+stage_progress_status:
+- not_started
+- active
+- done
+- skipped
+
+task_status:
+- open
+- done
+- overdue
+- cancelled
+
+progress_source:
+- manual
+- excel_import
+- bot
+
+
+TABLE: directions
+-----------------
+
+id
+- PK
+- smallserial
+
+code
+- text
+- UNIQUE
+- NOT NULL
+
+name
+- text
+- NOT NULL
+
+created_at
+- timestamptz
+- DEFAULT now()
+
+
+TABLE: students
+---------------
+
+id
+- PK
+- bigserial
+
+direction_id
+- FK -> directions.id
+
+name
+- text
+- NOT NULL
+
+telegram_username
+- text
+- UNIQUE
+
+telegram_user_id
+- bigint
+- UNIQUE
+
+target_market
+- text
+
+offer
+- text
+
+status
+- student_status
+- DEFAULT active
+
+started_at
+- date
+
+dropped_at
+- date
+
+created_at
+- timestamptz
+- DEFAULT now()
+
+updated_at
+- timestamptz
+- DEFAULT now()
+
+CHECK:
+- telegram_username OR telegram_user_id
+
+
+TABLE: stages
+-------------
+
+id
+- PK
+- bigserial
+
+direction_id
+- FK -> directions.id
+
+stage_number
+- int
+- NOT NULL
+
+title
+- text
+- NOT NULL
+
+description
+- text
+
+planned_duration_days
+- int
+
+is_active
+- boolean
+- DEFAULT true
+
+created_at
+- timestamptz
+- DEFAULT now()
+
+updated_at
+- timestamptz
+- DEFAULT now()
+
+UNIQUE:
+- (direction_id, stage_number)
+
+CHECK:
+- stage_number > 0
+- planned_duration_days IS NULL OR > 0
+
+
+TABLE: student_stage_progress
+-----------------------------
+
+id
+- PK
+- bigserial
+
+student_id
+- FK -> students.id
+- ON DELETE CASCADE
+
+stage_id
+- FK -> stages.id
+
+status
+- stage_progress_status
+- DEFAULT not_started
+
+started_at
+- date
+
+completed_at
+- date
+
+planned_deadline
+- date
+
+mentor_comment
+- text
+
+created_at
+- timestamptz
+- DEFAULT now()
+
+updated_at
+- timestamptz
+- DEFAULT now()
+
+UNIQUE:
+- (student_id, stage_id)
+
+CHECK:
+- completed_at >= started_at
+
+
+TABLE: daily_progress
+---------------------
+
+id
+- PK
+- bigserial
+
+student_id
+- FK -> students.id
+- ON DELETE CASCADE
+
+progress_date
+- date
+- NOT NULL
+
+stage_id
+- FK -> stages.id
+- NULL
+
+status
+- daily_status
+- NOT NULL
+
+note
+- text
+
+source
+- progress_source
+- DEFAULT manual
+
+created_at
+- timestamptz
+- DEFAULT now()
+
+updated_at
+- timestamptz
+- DEFAULT now()
+
+UNIQUE:
+- (student_id, progress_date)
+
+
+TABLE: student_tasks
+--------------------
+
+id
+- PK
+- bigserial
+
+student_id
+- FK -> students.id
+- ON DELETE CASCADE
+
+task_order
+- int
+
+title
+- text
+- NOT NULL
+
+description
+- text
+
+deadline
+- date
+
+completed_at
+- timestamptz
+
+mentor_task
+- text
+
+status
+- task_status
+- DEFAULT open
+
+created_at
+- timestamptz
+- DEFAULT now()
+
+updated_at
+- timestamptz
+- DEFAULT now()
+
+CHECK:
+- task_order IS NULL OR > 0

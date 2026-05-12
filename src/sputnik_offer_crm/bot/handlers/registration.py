@@ -26,12 +26,9 @@ logger = get_logger(__name__)
 
 
 async def show_student_menu(message: Message) -> None:
-    """Show main menu for registered student (temporary entry point)."""
-    await message.answer(
-        "📚 Главное меню\n\n"
-        "Вы зарегистрированы в системе.\n"
-        "Функционал кабинета ученика будет доступен в следующих версиях."
-    )
+    """Show main menu for registered student."""
+    from sputnik_offer_crm.bot.handlers.student import show_student_menu as _show_student_menu
+    await _show_student_menu(message)
 
 
 @router.message(CommandStart())
