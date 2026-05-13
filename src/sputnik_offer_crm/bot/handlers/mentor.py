@@ -1,5 +1,7 @@
 """Mentor handlers."""
 
+from datetime import date
+
 from aiogram import F, Router
 from aiogram.fsm.context import FSMContext
 from aiogram.types import CallbackQuery, Message, InlineKeyboardButton, InlineKeyboardMarkup
@@ -15,8 +17,13 @@ from sputnik_offer_crm.db import get_session
 from sputnik_offer_crm.services import (
     AlreadyOnFinalStageError,
     AlreadyOnThisStageError,
+    DeadlineManagementError,
+    DeadlineStudentHasNoProgressError,
+    DeadlineStudentNotFoundError,
     InviteCodeGenerationError,
+    InvalidDeadlineDateError,
     ManualStageSelectionError,
+    MentorDeadlineService,
     MentorNotFoundError,
     MentorProgressService,
     MentorService,
@@ -402,6 +409,12 @@ async def show_student_card(message: Message, student_id: int) -> None:
                 InlineKeyboardButton(
                     text="🎯 Выбрать этап вручную",
                     callback_data=f"select_stage:{student_id}"
+                )
+            ],
+            [
+                InlineKeyboardButton(
+                    text="📅 Изменить дедлайн текущего этапа",
+                    callback_data=f"change_deadline:{student_id}"
                 )
             ],
         ]
@@ -868,3 +881,381 @@ async def handle_cancel_manual_stage(callback: CallbackQuery, state: FSMContext)
 
     # Show card again
     await show_student_card(callback.message, student_id)
+
+
+@router.callback_query(F.data.startswith("change_deadline:"))
+async def handle_change_deadline_request(callback: CallbackQuery, state: FSMContext) -> None:
+    """Handle request to change current stage deadline."""
+    await callback.answer()
+
+    student_id = int(callback.data.split(":", 1)[1])
+
+    async with get_session() as session:
+        # Check mentor access
+        mentor_service = MentorService(session)
+        try:
+            await mentor_service.check_mentor_access(callback.from_user.id)
+        except MentorNotFoundError:
+            await callback.message.edit_text("❌ Доступ запрещён. Вы не являетесь ментором.")
+            return
+
+        # Get current stage and deadline
+        deadline_service = MentorDeadlineService(session)
+        try:
+            current_stage, current_deadline = await deadline_service.get_current_stage_deadline(
+                student_id
+            )
+        except DeadlineStudentNotFoundError:
+            await callback.message.edit_text(
+                "❌ Ученик не найден.",
+                reply_markup=get_mentor_menu_keyboard(),
+            )
+            return
+        except DeadlineStudentHasNoProgressError:
+            await callback.message.edit_text(
+                "❌ У ученика нет записи о прогрессе.",
+                reply_markup=get_mentor_menu_keyboard(),
+            )
+            return
+        except Exception as e:
+            logger.error("Failed to get current stage deadline", error=str(e))
+            await callback.message.edit_text(
+                "❌ Не удалось получить информацию о дедлайне.",
+                reply_markup=get_mentor_menu_keyboard(),
+            )
+            return
+
+        # Show deadline options
+        from datetime import date, timedelta
+
+        today = date.today()
+        deadline_text = (
+            f"📅 Изменение дедлайна текущего этапа\n\n"
+            f"📍 Текущий этап: {current_stage.title}\n"
+        )
+
+        if current_deadline:
+            deadline_str = current_deadline.strftime("%d.%m.%Y")
+            deadline_text += f"⏰ Текущий дедлайн: {deadline_str}\n\n"
+        else:
+            deadline_text += "⏰ Дедлайн не установлен\n\n"
+
+        deadline_text += "Выберите новый дедлайн:"
+
+        buttons = [
+            [
+                InlineKeyboardButton(
+                    text=f"📅 +3 дня ({(today + timedelta(days=3)).strftime('%d.%m')})",
+                    callback_data=f"deadline_days:{student_id}:3"
+                )
+            ],
+            [
+                InlineKeyboardButton(
+                    text=f"📅 +7 дней ({(today + timedelta(days=7)).strftime('%d.%m')})",
+                    callback_data=f"deadline_days:{student_id}:7"
+                )
+            ],
+            [
+                InlineKeyboardButton(
+                    text=f"📅 +14 дней ({(today + timedelta(days=14)).strftime('%d.%m')})",
+                    callback_data=f"deadline_days:{student_id}:14"
+                )
+            ],
+            [
+                InlineKeyboardButton(
+                    text="📝 Своя дата",
+                    callback_data=f"deadline_custom:{student_id}"
+                )
+            ],
+            [
+                InlineKeyboardButton(
+                    text="❌ Отмена",
+                    callback_data=f"cancel_deadline:{student_id}"
+                )
+            ],
+        ]
+
+        await callback.message.edit_text(
+            deadline_text,
+            reply_markup=InlineKeyboardMarkup(inline_keyboard=buttons),
+        )
+
+        await state.update_data(student_id=student_id, current_stage_id=current_stage.id)
+        await state.set_state(MentorStudentViewStates.selecting_deadline_option)
+
+
+@router.callback_query(MentorStudentViewStates.selecting_deadline_option, F.data.startswith("deadline_days:"))
+async def handle_deadline_days_selection(callback: CallbackQuery, state: FSMContext) -> None:
+    """Handle deadline selection with predefined days offset."""
+    await callback.answer()
+
+    parts = callback.data.split(":", 2)
+    student_id = int(parts[1])
+    days = int(parts[2])
+
+    from datetime import date, timedelta
+
+    new_deadline = date.today() + timedelta(days=days)
+
+    # Show confirmation
+    await show_deadline_confirmation(callback, state, student_id, new_deadline)
+
+
+@router.callback_query(MentorStudentViewStates.selecting_deadline_option, F.data.startswith("deadline_custom:"))
+async def handle_deadline_custom_request(callback: CallbackQuery, state: FSMContext) -> None:
+    """Handle request for custom deadline date."""
+    await callback.answer()
+
+    student_id = int(callback.data.split(":", 1)[1])
+
+    await callback.message.edit_text(
+        "📝 Введите дату дедлайна\n\n"
+        "Формат: ДД.ММ.ГГГГ\n"
+        "Например: 25.12.2026"
+    )
+
+    await state.update_data(student_id=student_id)
+    await state.set_state(MentorStudentViewStates.waiting_for_custom_deadline)
+
+
+@router.message(MentorStudentViewStates.waiting_for_custom_deadline)
+async def handle_custom_deadline_input(message: Message, state: FSMContext) -> None:
+    """Handle custom deadline date input."""
+    if not message.text:
+        await message.answer("Пожалуйста, отправьте текстовое сообщение с датой.")
+        return
+
+    date_str = message.text.strip()
+
+    # Parse date
+    from datetime import datetime
+
+    try:
+        new_deadline = datetime.strptime(date_str, "%d.%m.%Y").date()
+    except ValueError:
+        await message.answer(
+            "❌ Неверный формат даты.\n\n"
+            "Используйте формат: ДД.ММ.ГГГГ\n"
+            "Например: 25.12.2026"
+        )
+        return
+
+    # Validate date is not in the past
+    from datetime import date
+
+    if new_deadline < date.today():
+        await message.answer(
+            "❌ Дата не может быть в прошлом.\n\n"
+            "Введите дату в будущем."
+        )
+        return
+
+    data = await state.get_data()
+    student_id = data.get("student_id")
+
+    if not student_id:
+        await message.answer(
+            "❌ Ошибка: данные сессии потеряны. Начните заново.",
+            reply_markup=get_mentor_menu_keyboard(),
+        )
+        await state.clear()
+        return
+
+    # Show confirmation
+    await show_deadline_confirmation_message(message, state, student_id, new_deadline)
+
+
+async def show_deadline_confirmation(
+    callback: CallbackQuery, state: FSMContext, student_id: int, new_deadline: date
+) -> None:
+    """Show deadline change confirmation (for callback)."""
+    async with get_session() as session:
+        deadline_service = MentorDeadlineService(session)
+        try:
+            current_stage, current_deadline = await deadline_service.get_current_stage_deadline(
+                student_id
+            )
+
+            deadline_str = new_deadline.strftime("%d.%m.%Y")
+            confirmation_text = (
+                f"📅 Подтверждение изменения дедлайна\n\n"
+                f"📍 Этап: {current_stage.title}\n"
+            )
+
+            if current_deadline:
+                old_deadline_str = current_deadline.strftime("%d.%m.%Y")
+                confirmation_text += f"⏰ Текущий дедлайн: {old_deadline_str}\n"
+
+            confirmation_text += f"➡️ Новый дедлайн: {deadline_str}\n\n"
+            confirmation_text += "Подтвердите изменение:"
+
+            buttons = [
+                [
+                    InlineKeyboardButton(
+                        text="✅ Подтвердить",
+                        callback_data=f"confirm_deadline:{student_id}:{new_deadline.isoformat()}"
+                    ),
+                    InlineKeyboardButton(
+                        text="❌ Отмена",
+                        callback_data=f"cancel_deadline:{student_id}"
+                    ),
+                ]
+            ]
+
+            await callback.message.edit_text(
+                confirmation_text,
+                reply_markup=InlineKeyboardMarkup(inline_keyboard=buttons),
+            )
+
+            await state.update_data(student_id=student_id, new_deadline=new_deadline.isoformat())
+            await state.set_state(MentorStudentViewStates.confirming_deadline)
+
+        except Exception as e:
+            logger.error("Failed to show deadline confirmation", error=str(e), exc_info=True)
+            await callback.message.edit_text(
+                "❌ Произошла ошибка.",
+                reply_markup=get_mentor_menu_keyboard(),
+            )
+            await state.clear()
+
+
+async def show_deadline_confirmation_message(
+    message: Message, state: FSMContext, student_id: int, new_deadline: date
+) -> None:
+    """Show deadline change confirmation (for message)."""
+    async with get_session() as session:
+        deadline_service = MentorDeadlineService(session)
+        try:
+            current_stage, current_deadline = await deadline_service.get_current_stage_deadline(
+                student_id
+            )
+
+            deadline_str = new_deadline.strftime("%d.%m.%Y")
+            confirmation_text = (
+                f"📅 Подтверждение изменения дедлайна\n\n"
+                f"📍 Этап: {current_stage.title}\n"
+            )
+
+            if current_deadline:
+                old_deadline_str = current_deadline.strftime("%d.%m.%Y")
+                confirmation_text += f"⏰ Текущий дедлайн: {old_deadline_str}\n"
+
+            confirmation_text += f"➡️ Новый дедлайн: {deadline_str}\n\n"
+            confirmation_text += "Подтвердите изменение:"
+
+            buttons = [
+                [
+                    InlineKeyboardButton(
+                        text="✅ Подтвердить",
+                        callback_data=f"confirm_deadline:{student_id}:{new_deadline.isoformat()}"
+                    ),
+                    InlineKeyboardButton(
+                        text="❌ Отмена",
+                        callback_data=f"cancel_deadline:{student_id}"
+                    ),
+                ]
+            ]
+
+            await message.answer(
+                confirmation_text,
+                reply_markup=InlineKeyboardMarkup(inline_keyboard=buttons),
+            )
+
+            await state.update_data(student_id=student_id, new_deadline=new_deadline.isoformat())
+            await state.set_state(MentorStudentViewStates.confirming_deadline)
+
+        except Exception as e:
+            logger.error("Failed to show deadline confirmation", error=str(e), exc_info=True)
+            await message.answer(
+                "❌ Произошла ошибка.",
+                reply_markup=get_mentor_menu_keyboard(),
+            )
+            await state.clear()
+
+
+@router.callback_query(MentorStudentViewStates.selecting_deadline_option, F.data.startswith("cancel_deadline:"))
+@router.callback_query(MentorStudentViewStates.confirming_deadline, F.data.startswith("cancel_deadline:"))
+async def handle_cancel_deadline(callback: CallbackQuery, state: FSMContext) -> None:
+    """Handle cancellation of deadline change."""
+    await callback.answer()
+
+    student_id = int(callback.data.split(":", 1)[1])
+
+    await callback.message.edit_text("❌ Изменение дедлайна отменено.")
+    await state.clear()
+
+    # Show card again
+    await show_student_card(callback.message, student_id)
+
+
+@router.callback_query(MentorStudentViewStates.confirming_deadline, F.data.startswith("confirm_deadline:"))
+async def handle_confirm_deadline(callback: CallbackQuery, state: FSMContext) -> None:
+    """Handle confirmation of deadline change."""
+    await callback.answer()
+
+    parts = callback.data.split(":", 2)
+    student_id = int(parts[1])
+    deadline_iso = parts[2]
+
+    from datetime import date
+
+    new_deadline = date.fromisoformat(deadline_iso)
+
+    async with get_session() as session:
+        # Check mentor access
+        mentor_service = MentorService(session)
+        try:
+            await mentor_service.check_mentor_access(callback.from_user.id)
+        except MentorNotFoundError:
+            await callback.message.edit_text("❌ Доступ запрещён.")
+            await state.clear()
+            return
+
+        # Set deadline
+        deadline_service = MentorDeadlineService(session)
+        try:
+            current_stage = await deadline_service.set_current_stage_deadline(
+                student_id, new_deadline
+            )
+
+            deadline_str = new_deadline.strftime("%d.%m.%Y")
+            await callback.message.edit_text(
+                f"✅ Дедлайн успешно изменён!\n\n"
+                f"📍 Этап: {current_stage.title}\n"
+                f"📅 Новый дедлайн: {deadline_str}"
+            )
+
+            logger.info(
+                "Deadline changed for current stage",
+                mentor_id=callback.from_user.id,
+                student_id=student_id,
+                stage_id=current_stage.id,
+                new_deadline=deadline_iso,
+            )
+
+            # Show updated card
+            await show_student_card(callback.message, student_id)
+
+        except DeadlineStudentNotFoundError:
+            await callback.message.edit_text(
+                "❌ Ученик не найден.",
+                reply_markup=get_mentor_menu_keyboard(),
+            )
+        except DeadlineStudentHasNoProgressError:
+            await callback.message.edit_text(
+                "❌ У ученика нет записи о прогрессе.",
+                reply_markup=get_mentor_menu_keyboard(),
+            )
+        except InvalidDeadlineDateError:
+            await callback.message.edit_text(
+                "❌ Некорректная дата дедлайна.",
+                reply_markup=get_mentor_menu_keyboard(),
+            )
+        except DeadlineManagementError as e:
+            logger.error("Failed to set deadline", error=str(e), exc_info=True)
+            await callback.message.edit_text(
+                "❌ Не удалось изменить дедлайн.",
+                reply_markup=get_mentor_menu_keyboard(),
+            )
+        finally:
+            await state.clear()

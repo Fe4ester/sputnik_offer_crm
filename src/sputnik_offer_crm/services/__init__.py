@@ -6,6 +6,13 @@ from sputnik_offer_crm.services.mentor import (
     MentorService,
     NoActiveDirectionsError,
 )
+from sputnik_offer_crm.services.mentor_deadline import (
+    DeadlineManagementError,
+    InvalidDeadlineDateError,
+    MentorDeadlineService,
+    StudentHasNoProgressError as DeadlineStudentHasNoProgressError,
+    StudentNotFoundError as DeadlineStudentNotFoundError,
+)
 from sputnik_offer_crm.services.mentor_progress import (
     AlreadyOnFinalStageError,
     AlreadyOnThisStageError,
@@ -68,4 +75,9 @@ __all__ = [
     "StageNotFoundError",
     "StageNotInDirectionError",
     "AlreadyOnThisStageError",
+    "MentorDeadlineService",
+    "DeadlineManagementError",
+    "DeadlineStudentNotFoundError",
+    "DeadlineStudentHasNoProgressError",
+    "InvalidDeadlineDateError",
 ]

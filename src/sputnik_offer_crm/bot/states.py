@@ -26,6 +26,9 @@ class MentorStudentViewStates(StatesGroup):
     confirming_next_stage = State()
     selecting_manual_stage = State()
     confirming_manual_stage = State()
+    selecting_deadline_option = State()
+    waiting_for_custom_deadline = State()
+    confirming_deadline = State()
 
 
 class WeeklyReportStates(StatesGroup):
