@@ -82,6 +82,11 @@ from sputnik_offer_crm.services.student import (
     StudentProgressInfo,
     StudentService,
 )
+from sputnik_offer_crm.services.student_timezone import (
+    StudentTimezoneService,
+    StudentTimezoneError,
+    StudentNotFoundError as TimezoneStudentNotFoundError,
+)
 from sputnik_offer_crm.services.weekly_report import WeeklyReportService
 
 __all__ = [
@@ -98,6 +103,9 @@ __all__ = [
     "StudentService",
     "StudentProgressInfo",
     "DeadlineInfo",
+    "StudentTimezoneService",
+    "StudentTimezoneError",
+    "TimezoneStudentNotFoundError",
     "WeeklyReportService",
     "MentorStudentService",
     "StudentSearchResult",

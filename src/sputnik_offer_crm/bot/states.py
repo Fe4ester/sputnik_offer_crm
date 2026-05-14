@@ -54,3 +54,12 @@ class DirectionManagementStates(StatesGroup):
     entering_stage_title = State()
     entering_stage_description = State()
     entering_stage_duration = State()
+
+
+class StudentTimezoneChangeStates(StatesGroup):
+    """States for student timezone change flow."""
+
+    selecting_timezone = State()
+    selecting_other_timezone = State()
+    waiting_for_local_time = State()
+    confirming_timezone = State()
