@@ -44,3 +44,13 @@ class WeeklyReportStates(StatesGroup):
     waiting_for_what_did = State()
     waiting_for_problems_solved = State()
     waiting_for_problems_unsolved = State()
+
+
+class DirectionManagementStates(StatesGroup):
+    """States for direction and stage management flow."""
+
+    entering_direction_code = State()
+    entering_direction_name = State()
+    entering_stage_title = State()
+    entering_stage_description = State()
+    entering_stage_duration = State()

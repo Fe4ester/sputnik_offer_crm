@@ -60,6 +60,15 @@ from sputnik_offer_crm.services.notification import (
     NotificationService,
     WeeklyReportReminder,
 )
+from sputnik_offer_crm.services.direction_management import (
+    DirectionManagementService,
+    DirectionManagementError,
+    DirectionCodeAlreadyExistsError,
+    DirectionNotFoundError,
+    DirectionInUseError,
+    DirectionStageNotFoundError,
+    DirectionStageInUseError,
+)
 from sputnik_offer_crm.services.registration import (
     DirectionHasNoStagesError,
     InviteCodeAlreadyUsedError,
@@ -130,4 +139,11 @@ __all__ = [
     "NotificationRecipient",
     "WeeklyReportReminder",
     "DeadlineReminder",
+    "DirectionManagementService",
+    "DirectionManagementError",
+    "DirectionCodeAlreadyExistsError",
+    "DirectionNotFoundError",
+    "DirectionInUseError",
+    "DirectionStageNotFoundError",
+    "DirectionStageInUseError",
 ]
