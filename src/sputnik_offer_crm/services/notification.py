@@ -39,6 +39,7 @@ class DeadlineReminder(NamedTuple):
     """Deadline reminder notification."""
 
     recipient: NotificationRecipient
+    stage_id: int
     deadline_date: date
     deadline_title: str
     days_until: int
@@ -299,6 +300,7 @@ class NotificationService:
             reminders.append(
                 DeadlineReminder(
                     recipient=recipient,
+                    stage_id=stage.id,
                     deadline_date=deadline_date,
                     deadline_title=stage.title,
                     days_until=days_until,

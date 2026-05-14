@@ -18,6 +18,9 @@ dependencies = [
     "pytz (>=2026.2,<2027.0)",
 ]
 
+[project.scripts]
+sputnik-notifications = "sputnik_offer_crm.jobs.notification_job:main"
+
 
 [tool.poetry]
 packages = [{include = "sputnik_offer_crm", from = "src"}]
