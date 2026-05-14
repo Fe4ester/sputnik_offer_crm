@@ -25,18 +25,29 @@ from sputnik_offer_crm.services import (
     ManualStageSelectionError,
     MentorDeadlineService,
     MentorNotFoundError,
+    MentorOfferCompletionService,
+    MentorPauseResumeService,
     MentorProgressService,
     MentorService,
     MentorStudentService,
     MentorStudentStatusService,
     MoveToNextStageError,
     NoStagesFoundError,
+    OfferCompletionError,
+    OfferCompletionStudentNotFoundError,
+    PauseResumeError,
+    PauseResumeStudentInactiveError,
+    PauseResumeStudentNotFoundError,
     StageNotFoundError,
     StageNotInDirectionError,
     StatusStudentNotFoundError,
+    StudentAlreadyCompletedError,
     StudentAlreadyInactiveError,
+    StudentAlreadyPausedError,
     StudentHasNoProgressError,
+    StudentInactiveError,
     StudentNotFoundError as ProgressStudentNotFoundError,
+    StudentNotPausedError,
     StudentStatusManagementError,
 )
 from sputnik_offer_crm.utils.logging import get_logger
@@ -356,9 +367,28 @@ async def show_student_card(message: Message, student_id: int) -> None:
         started_date = card.progress.started_at.strftime("%d.%m.%Y")
         lines.append(f"📅 Дата старта: {started_date}")
         lines.append(f"🌍 Часовой пояс: {card.student.timezone}")
-        status_emoji = "✅" if card.student.is_active else "⏸"
-        status_text = "Активен" if card.student.is_active else "Неактивен"
+
+        # Status with pause indication
+        if not card.student.is_active:
+            status_emoji = "⏸"
+            status_text = "Неактивен (отчислен)"
+        elif card.student.is_paused:
+            status_emoji = "⏸"
+            status_text = "На паузе"
+        else:
+            status_emoji = "✅"
+            status_text = "Активен"
         lines.append(f"{status_emoji} Статус: {status_text}")
+
+        # Offer info if completed
+        if card.student.offer_received_at:
+            lines.append("")
+            lines.append("🎉 Завершён с оффером:")
+            lines.append(f"🏢 Компания: {card.student.offer_company}")
+            lines.append(f"💼 Позиция: {card.student.offer_position}")
+            offer_date = card.student.offer_received_at.strftime("%d.%m.%Y")
+            lines.append(f"📅 Дата получения: {offer_date}")
+
         lines.append("")
 
         # Deadlines
@@ -430,11 +460,36 @@ async def show_student_card(message: Message, student_id: int) -> None:
             ],
             [
                 InlineKeyboardButton(
-                    text="❌ Отчислить",
-                    callback_data=f"dropout:{student_id}"
+                    text="✅ Завершить / получил оффер",
+                    callback_data=f"offer_completion:{student_id}"
                 )
             ],
         ]
+
+        # Add pause/resume button based on current state
+        if card.student.is_active:
+            if card.student.is_paused:
+                buttons.append([
+                    InlineKeyboardButton(
+                        text="▶️ Возобновить",
+                        callback_data=f"resume:{student_id}"
+                    )
+                ])
+            else:
+                buttons.append([
+                    InlineKeyboardButton(
+                        text="⏸ Поставить на паузу",
+                        callback_data=f"pause:{student_id}"
+                    )
+                ])
+
+        # Add dropout button
+        buttons.append([
+            InlineKeyboardButton(
+                text="❌ Отчислить",
+                callback_data=f"dropout:{student_id}"
+            )
+        ])
 
         await message.answer(
             "\n".join(lines),
@@ -1610,6 +1665,617 @@ async def handle_cancel_dropout(callback: CallbackQuery, state: FSMContext) -> N
     student_id = int(callback.data.split(":", 1)[1])
 
     await callback.message.edit_text("❌ Отчисление отменено.")
+    await state.clear()
+
+    # Show card again
+    await show_student_card(callback.message, student_id)
+
+
+@router.callback_query(F.data.startswith("offer_completion:"))
+async def handle_offer_completion_request(callback: CallbackQuery, state: FSMContext) -> None:
+    """Handle request to complete student with offer."""
+    await callback.answer()
+
+    student_id = int(callback.data.split(":", 1)[1])
+
+    async with get_session() as session:
+        # Check mentor access
+        mentor_service = MentorService(session)
+        try:
+            await mentor_service.check_mentor_access(callback.from_user.id)
+        except MentorNotFoundError:
+            await callback.message.edit_text("❌ Доступ запрещён. Вы не являетесь ментором.")
+            return
+
+        # Get student info
+        from sputnik_offer_crm.models import Student
+        from sqlalchemy import select
+
+        result = await session.execute(
+            select(Student).where(Student.id == student_id)
+        )
+        student = result.scalar_one_or_none()
+
+        if not student:
+            await callback.message.edit_text(
+                "❌ Ученик не найден.",
+                reply_markup=get_mentor_menu_keyboard(),
+            )
+            return
+
+        if not student.is_active:
+            await callback.message.edit_text(
+                "ℹ️ Ученик неактивен (отчислен). Завершение с оффером доступно только для активных учеников.",
+                reply_markup=get_mentor_menu_keyboard(),
+            )
+            return
+
+        if student.offer_received_at is not None:
+            offer_date = student.offer_received_at.strftime("%d.%m.%Y")
+            await callback.message.edit_text(
+                f"ℹ️ Ученик уже завершён с оффером.\n\n"
+                f"🏢 Компания: {student.offer_company}\n"
+                f"💼 Позиция: {student.offer_position}\n"
+                f"📅 Дата получения: {offer_date}",
+                reply_markup=get_mentor_menu_keyboard(),
+            )
+            return
+
+        # Start flow - ask for company
+        student_name = student.first_name
+        if student.last_name:
+            student_name += f" {student.last_name}"
+
+        await callback.message.edit_text(
+            f"✅ Завершение с оффером\n\n"
+            f"👤 Ученик: {student_name}\n\n"
+            f"Введите название компании:"
+        )
+
+        await state.update_data(student_id=student_id)
+        await state.set_state(MentorStudentViewStates.waiting_for_company)
+
+
+@router.message(MentorStudentViewStates.waiting_for_company)
+async def handle_company_input(message: Message, state: FSMContext) -> None:
+    """Handle company name input."""
+    if not message.text:
+        await message.answer("Пожалуйста, отправьте текстовое сообщение с названием компании.")
+        return
+
+    company = message.text.strip()
+
+    if not company:
+        await message.answer("Название компании не может быть пустым. Введите название компании:")
+        return
+
+    if len(company) > 500:
+        await message.answer(
+            "Название компании слишком длинное (максимум 500 символов). Введите название компании:"
+        )
+        return
+
+    # Store company and ask for position
+    await state.update_data(company=company)
+
+    await message.answer(
+        f"🏢 Компания: {company}\n\n"
+        f"Теперь введите название позиции:"
+    )
+
+    await state.set_state(MentorStudentViewStates.waiting_for_position)
+
+
+@router.message(MentorStudentViewStates.waiting_for_position)
+async def handle_position_input(message: Message, state: FSMContext) -> None:
+    """Handle position title input."""
+    if not message.text:
+        await message.answer("Пожалуйста, отправьте текстовое сообщение с названием позиции.")
+        return
+
+    position = message.text.strip()
+
+    if not position:
+        await message.answer("Название позиции не может быть пустым. Введите название позиции:")
+        return
+
+    if len(position) > 500:
+        await message.answer(
+            "Название позиции слишком длинное (максимум 500 символов). Введите название позиции:"
+        )
+        return
+
+    # Store position and show confirmation
+    await state.update_data(position=position)
+
+    data = await state.get_data()
+    student_id = data.get("student_id")
+    company = data.get("company")
+
+    if not student_id or not company:
+        await message.answer(
+            "❌ Ошибка: данные сессии потеряны. Начните заново.",
+            reply_markup=get_mentor_menu_keyboard(),
+        )
+        await state.clear()
+        return
+
+    # Get student name for confirmation
+    async with get_session() as session:
+        from sputnik_offer_crm.models import Student
+        from sqlalchemy import select
+
+        result = await session.execute(
+            select(Student).where(Student.id == student_id)
+        )
+        student = result.scalar_one_or_none()
+
+        if not student:
+            await message.answer(
+                "❌ Ученик не найден.",
+                reply_markup=get_mentor_menu_keyboard(),
+            )
+            await state.clear()
+            return
+
+        student_name = student.first_name
+        if student.last_name:
+            student_name += f" {student.last_name}"
+
+        confirmation_text = (
+            f"✅ Подтверждение завершения с оффером\n\n"
+            f"👤 Ученик: {student_name}\n"
+            f"🏢 Компания: {company}\n"
+            f"💼 Позиция: {position}\n\n"
+            f"Подтвердите завершение:"
+        )
+
+        buttons = [
+            [
+                InlineKeyboardButton(
+                    text="✅ Подтвердить",
+                    callback_data=f"confirm_offer:{student_id}"
+                ),
+            ],
+            [
+                InlineKeyboardButton(
+                    text="❌ Отмена",
+                    callback_data=f"cancel_offer:{student_id}"
+                ),
+            ],
+        ]
+
+        await message.answer(
+            confirmation_text,
+            reply_markup=InlineKeyboardMarkup(inline_keyboard=buttons),
+        )
+
+        await state.set_state(MentorStudentViewStates.confirming_offer_completion)
+
+
+@router.callback_query(MentorStudentViewStates.confirming_offer_completion, F.data.startswith("confirm_offer:"))
+async def handle_confirm_offer_completion(callback: CallbackQuery, state: FSMContext) -> None:
+    """Handle confirmation of offer completion."""
+    await callback.answer()
+
+    student_id = int(callback.data.split(":", 1)[1])
+
+    data = await state.get_data()
+    company = data.get("company")
+    position = data.get("position")
+
+    if not company or not position:
+        await callback.message.edit_text(
+            "❌ Ошибка: данные оффера потеряны. Начните заново.",
+            reply_markup=get_mentor_menu_keyboard(),
+        )
+        await state.clear()
+        return
+
+    async with get_session() as session:
+        # Check mentor access
+        mentor_service = MentorService(session)
+        try:
+            await mentor_service.check_mentor_access(callback.from_user.id)
+        except MentorNotFoundError:
+            await callback.message.edit_text("❌ Доступ запрещён.")
+            await state.clear()
+            return
+
+        # Complete with offer
+        offer_service = MentorOfferCompletionService(session)
+        try:
+            student = await offer_service.complete_with_offer(
+                student_id, company, position
+            )
+
+            student_name = student.first_name
+            if student.last_name:
+                student_name += f" {student.last_name}"
+
+            offer_date = student.offer_received_at.strftime("%d.%m.%Y")
+
+            await callback.message.edit_text(
+                f"✅ Ученик успешно завершён с оффером!\n\n"
+                f"👤 {student_name}\n"
+                f"🏢 Компания: {company}\n"
+                f"💼 Позиция: {position}\n"
+                f"📅 Дата: {offer_date}\n\n"
+                f"Поздравляем с успешным завершением!"
+            )
+
+            logger.info(
+                "Student completed with offer",
+                mentor_id=callback.from_user.id,
+                student_id=student_id,
+                company=company,
+                position=position,
+            )
+
+            # Show updated card
+            await show_student_card(callback.message, student_id)
+
+        except OfferCompletionStudentNotFoundError:
+            await callback.message.edit_text(
+                "❌ Ученик не найден.",
+                reply_markup=get_mentor_menu_keyboard(),
+            )
+        except StudentInactiveError:
+            await callback.message.edit_text(
+                "❌ Ученик неактивен (отчислен).",
+                reply_markup=get_mentor_menu_keyboard(),
+            )
+        except StudentAlreadyCompletedError:
+            await callback.message.edit_text(
+                "ℹ️ Ученик уже завершён с оффером.",
+                reply_markup=get_mentor_menu_keyboard(),
+            )
+        except OfferCompletionError as e:
+            logger.error("Failed to complete student with offer", error=str(e), exc_info=True)
+            await callback.message.edit_text(
+                "❌ Не удалось завершить ученика с оффером.",
+                reply_markup=get_mentor_menu_keyboard(),
+            )
+        finally:
+            await state.clear()
+
+
+@router.callback_query(MentorStudentViewStates.confirming_offer_completion, F.data.startswith("cancel_offer:"))
+async def handle_cancel_offer_completion(callback: CallbackQuery, state: FSMContext) -> None:
+    """Handle cancellation of offer completion."""
+    await callback.answer()
+
+    student_id = int(callback.data.split(":", 1)[1])
+
+    await callback.message.edit_text("❌ Завершение с оффером отменено.")
+    await state.clear()
+
+    # Show card again
+    await show_student_card(callback.message, student_id)
+
+
+@router.callback_query(F.data.startswith("pause:"))
+async def handle_pause_request(callback: CallbackQuery, state: FSMContext) -> None:
+    """Handle request to pause student."""
+    await callback.answer()
+
+    student_id = int(callback.data.split(":", 1)[1])
+
+    async with get_session() as session:
+        # Check mentor access
+        mentor_service = MentorService(session)
+        try:
+            await mentor_service.check_mentor_access(callback.from_user.id)
+        except MentorNotFoundError:
+            await callback.message.edit_text("❌ Доступ запрещён. Вы не являетесь ментором.")
+            return
+
+        # Get student info
+        from sputnik_offer_crm.models import Student
+        from sqlalchemy import select
+
+        result = await session.execute(
+            select(Student).where(Student.id == student_id)
+        )
+        student = result.scalar_one_or_none()
+
+        if not student:
+            await callback.message.edit_text(
+                "❌ Ученик не найден.",
+                reply_markup=get_mentor_menu_keyboard(),
+            )
+            return
+
+        if not student.is_active:
+            await callback.message.edit_text(
+                "ℹ️ Ученик неактивен (отчислен). Постановка на паузу доступна только для активных учеников.",
+                reply_markup=get_mentor_menu_keyboard(),
+            )
+            return
+
+        if student.is_paused:
+            await callback.message.edit_text(
+                "ℹ️ Ученик уже на паузе.",
+                reply_markup=get_mentor_menu_keyboard(),
+            )
+            return
+
+        # Show confirmation
+        student_name = student.first_name
+        if student.last_name:
+            student_name += f" {student.last_name}"
+
+        confirmation_text = (
+            f"⏸ Постановка на паузу\n\n"
+            f"👤 Ученик: {student_name}\n\n"
+            f"⚠️ Внимание:\n"
+            f"• Ученик будет поставлен на паузу\n"
+            f"• Все данные (прогресс, отчёты, задачи) сохранятся\n"
+            f"• Ученик не сможет отправлять отчёты и использовать активные функции\n"
+            f"• Вы сможете возобновить ученика позже\n\n"
+            f"Подтвердите постановку на паузу:"
+        )
+
+        buttons = [
+            [
+                InlineKeyboardButton(
+                    text="✅ Подтвердить",
+                    callback_data=f"confirm_pause:{student_id}"
+                ),
+            ],
+            [
+                InlineKeyboardButton(
+                    text="❌ Отмена",
+                    callback_data=f"cancel_pause:{student_id}"
+                ),
+            ],
+        ]
+
+        await callback.message.edit_text(
+            confirmation_text,
+            reply_markup=InlineKeyboardMarkup(inline_keyboard=buttons),
+        )
+
+        await state.update_data(student_id=student_id)
+        await state.set_state(MentorStudentViewStates.confirming_pause)
+
+
+@router.callback_query(MentorStudentViewStates.confirming_pause, F.data.startswith("confirm_pause:"))
+async def handle_confirm_pause(callback: CallbackQuery, state: FSMContext) -> None:
+    """Handle confirmation of student pause."""
+    await callback.answer()
+
+    student_id = int(callback.data.split(":", 1)[1])
+
+    async with get_session() as session:
+        # Check mentor access
+        mentor_service = MentorService(session)
+        try:
+            await mentor_service.check_mentor_access(callback.from_user.id)
+        except MentorNotFoundError:
+            await callback.message.edit_text("❌ Доступ запрещён.")
+            await state.clear()
+            return
+
+        # Perform pause
+        pause_service = MentorPauseResumeService(session)
+        try:
+            student = await pause_service.pause_student(student_id)
+
+            student_name = student.first_name
+            if student.last_name:
+                student_name += f" {student.last_name}"
+
+            await callback.message.edit_text(
+                f"⏸ Ученик поставлен на паузу\n\n"
+                f"👤 {student_name}\n\n"
+                f"Все данные сохранены. Вы можете возобновить ученика позже."
+            )
+
+            logger.info(
+                "Student paused",
+                mentor_id=callback.from_user.id,
+                student_id=student_id,
+            )
+
+            # Show updated card
+            await show_student_card(callback.message, student_id)
+
+        except PauseResumeStudentNotFoundError:
+            await callback.message.edit_text(
+                "❌ Ученик не найден.",
+                reply_markup=get_mentor_menu_keyboard(),
+            )
+        except PauseResumeStudentInactiveError:
+            await callback.message.edit_text(
+                "❌ Ученик неактивен (отчислен).",
+                reply_markup=get_mentor_menu_keyboard(),
+            )
+        except StudentAlreadyPausedError:
+            await callback.message.edit_text(
+                "ℹ️ Ученик уже на паузе.",
+                reply_markup=get_mentor_menu_keyboard(),
+            )
+        except PauseResumeError as e:
+            logger.error("Failed to pause student", error=str(e), exc_info=True)
+            await callback.message.edit_text(
+                "❌ Не удалось поставить ученика на паузу.",
+                reply_markup=get_mentor_menu_keyboard(),
+            )
+        finally:
+            await state.clear()
+
+
+@router.callback_query(MentorStudentViewStates.confirming_pause, F.data.startswith("cancel_pause:"))
+async def handle_cancel_pause(callback: CallbackQuery, state: FSMContext) -> None:
+    """Handle cancellation of student pause."""
+    await callback.answer()
+
+    student_id = int(callback.data.split(":", 1)[1])
+
+    await callback.message.edit_text("❌ Постановка на паузу отменена.")
+    await state.clear()
+
+    # Show card again
+    await show_student_card(callback.message, student_id)
+
+
+@router.callback_query(F.data.startswith("resume:"))
+async def handle_resume_request(callback: CallbackQuery, state: FSMContext) -> None:
+    """Handle request to resume student."""
+    await callback.answer()
+
+    student_id = int(callback.data.split(":", 1)[1])
+
+    async with get_session() as session:
+        # Check mentor access
+        mentor_service = MentorService(session)
+        try:
+            await mentor_service.check_mentor_access(callback.from_user.id)
+        except MentorNotFoundError:
+            await callback.message.edit_text("❌ Доступ запрещён. Вы не являетесь ментором.")
+            return
+
+        # Get student info
+        from sputnik_offer_crm.models import Student
+        from sqlalchemy import select
+
+        result = await session.execute(
+            select(Student).where(Student.id == student_id)
+        )
+        student = result.scalar_one_or_none()
+
+        if not student:
+            await callback.message.edit_text(
+                "❌ Ученик не найден.",
+                reply_markup=get_mentor_menu_keyboard(),
+            )
+            return
+
+        if not student.is_active:
+            await callback.message.edit_text(
+                "ℹ️ Ученик неактивен (отчислен). Возобновление доступно только для активных учеников.",
+                reply_markup=get_mentor_menu_keyboard(),
+            )
+            return
+
+        if not student.is_paused:
+            await callback.message.edit_text(
+                "ℹ️ Ученик не на паузе.",
+                reply_markup=get_mentor_menu_keyboard(),
+            )
+            return
+
+        # Show confirmation
+        student_name = student.first_name
+        if student.last_name:
+            student_name += f" {student.last_name}"
+
+        confirmation_text = (
+            f"▶️ Возобновление ученика\n\n"
+            f"👤 Ученик: {student_name}\n\n"
+            f"Ученик будет возобновлён и сможет снова использовать активные функции бота.\n\n"
+            f"Подтвердите возобновление:"
+        )
+
+        buttons = [
+            [
+                InlineKeyboardButton(
+                    text="✅ Подтвердить",
+                    callback_data=f"confirm_resume:{student_id}"
+                ),
+            ],
+            [
+                InlineKeyboardButton(
+                    text="❌ Отмена",
+                    callback_data=f"cancel_resume:{student_id}"
+                ),
+            ],
+        ]
+
+        await callback.message.edit_text(
+            confirmation_text,
+            reply_markup=InlineKeyboardMarkup(inline_keyboard=buttons),
+        )
+
+        await state.update_data(student_id=student_id)
+        await state.set_state(MentorStudentViewStates.confirming_resume)
+
+
+@router.callback_query(MentorStudentViewStates.confirming_resume, F.data.startswith("confirm_resume:"))
+async def handle_confirm_resume(callback: CallbackQuery, state: FSMContext) -> None:
+    """Handle confirmation of student resume."""
+    await callback.answer()
+
+    student_id = int(callback.data.split(":", 1)[1])
+
+    async with get_session() as session:
+        # Check mentor access
+        mentor_service = MentorService(session)
+        try:
+            await mentor_service.check_mentor_access(callback.from_user.id)
+        except MentorNotFoundError:
+            await callback.message.edit_text("❌ Доступ запрещён.")
+            await state.clear()
+            return
+
+        # Perform resume
+        pause_service = MentorPauseResumeService(session)
+        try:
+            student = await pause_service.resume_student(student_id)
+
+            student_name = student.first_name
+            if student.last_name:
+                student_name += f" {student.last_name}"
+
+            await callback.message.edit_text(
+                f"▶️ Ученик возобновлён\n\n"
+                f"👤 {student_name}\n\n"
+                f"Ученик снова может использовать активные функции бота."
+            )
+
+            logger.info(
+                "Student resumed",
+                mentor_id=callback.from_user.id,
+                student_id=student_id,
+            )
+
+            # Show updated card
+            await show_student_card(callback.message, student_id)
+
+        except PauseResumeStudentNotFoundError:
+            await callback.message.edit_text(
+                "❌ Ученик не найден.",
+                reply_markup=get_mentor_menu_keyboard(),
+            )
+        except PauseResumeStudentInactiveError:
+            await callback.message.edit_text(
+                "❌ Ученик неактивен (отчислен).",
+                reply_markup=get_mentor_menu_keyboard(),
+            )
+        except StudentNotPausedError:
+            await callback.message.edit_text(
+                "ℹ️ Ученик не на паузе.",
+                reply_markup=get_mentor_menu_keyboard(),
+            )
+        except PauseResumeError as e:
+            logger.error("Failed to resume student", error=str(e), exc_info=True)
+            await callback.message.edit_text(
+                "❌ Не удалось возобновить ученика.",
+                reply_markup=get_mentor_menu_keyboard(),
+            )
+        finally:
+            await state.clear()
+
+
+@router.callback_query(MentorStudentViewStates.confirming_resume, F.data.startswith("cancel_resume:"))
+async def handle_cancel_resume(callback: CallbackQuery, state: FSMContext) -> None:
+    """Handle cancellation of student resume."""
+    await callback.answer()
+
+    student_id = int(callback.data.split(":", 1)[1])
+
+    await callback.message.edit_text("❌ Возобновление отменено.")
     await state.clear()
 
     # Show card again

@@ -52,6 +52,9 @@ class WeeklyReportService:
         if not student.is_active:
             return False, "Ваш аккаунт неактивен. Обратитесь к ментору."
 
+        if student.is_paused:
+            return False, "Вы на паузе. Обратитесь к ментору для возобновления."
+
         # Get current week start in student's timezone
         now = datetime.now(pytz.UTC)
         week_start = self.get_week_start_date(now, student.timezone)

@@ -31,6 +31,11 @@ class MentorStudentViewStates(StatesGroup):
     confirming_deadline = State()
     confirming_bulk_deadlines = State()
     confirming_dropout = State()
+    waiting_for_company = State()
+    waiting_for_position = State()
+    confirming_offer_completion = State()
+    confirming_pause = State()
+    confirming_resume = State()
 
 
 class WeeklyReportStates(StatesGroup):

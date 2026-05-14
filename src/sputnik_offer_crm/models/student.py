@@ -1,8 +1,9 @@
 """Student model."""
 
+from datetime import datetime
 from typing import TYPE_CHECKING
 
-from sqlalchemy import BigInteger, String
+from sqlalchemy import BigInteger, DateTime, String, Text
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from sputnik_offer_crm.db.base import Base
@@ -30,6 +31,14 @@ class Student(Base, TimestampMixin):
     username: Mapped[str | None] = mapped_column(String(255), nullable=True)
     timezone: Mapped[str] = mapped_column(String(50), nullable=False)
     is_active: Mapped[bool] = mapped_column(default=True, nullable=False)
+    is_paused: Mapped[bool] = mapped_column(default=False, nullable=False)
+
+    offer_company: Mapped[str | None] = mapped_column(Text, nullable=True)
+    offer_position: Mapped[str | None] = mapped_column(Text, nullable=True)
+    offer_received_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True),
+        nullable=True,
+    )
 
     # Relationships
     stage_progress: Mapped[list["StudentStageProgress"]] = relationship(

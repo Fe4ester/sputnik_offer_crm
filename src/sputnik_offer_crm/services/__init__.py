@@ -39,6 +39,21 @@ from sputnik_offer_crm.services.mentor_student_status import (
     StudentNotFoundError as StatusStudentNotFoundError,
     StudentStatusManagementError,
 )
+from sputnik_offer_crm.services.mentor_offer_completion import (
+    MentorOfferCompletionService,
+    OfferCompletionError,
+    OfferCompletionStudentNotFoundError,
+    StudentAlreadyCompletedError,
+    StudentInactiveError,
+)
+from sputnik_offer_crm.services.mentor_pause_resume import (
+    MentorPauseResumeService,
+    PauseResumeError,
+    PauseResumeStudentNotFoundError,
+    StudentAlreadyPausedError,
+    StudentInactiveError as PauseResumeStudentInactiveError,
+    StudentNotPausedError,
+)
 from sputnik_offer_crm.services.registration import (
     DirectionHasNoStagesError,
     InviteCodeAlreadyUsedError,
@@ -94,4 +109,15 @@ __all__ = [
     "StudentStatusManagementError",
     "StatusStudentNotFoundError",
     "StudentAlreadyInactiveError",
+    "MentorOfferCompletionService",
+    "OfferCompletionError",
+    "OfferCompletionStudentNotFoundError",
+    "StudentAlreadyCompletedError",
+    "StudentInactiveError",
+    "MentorPauseResumeService",
+    "PauseResumeError",
+    "PauseResumeStudentNotFoundError",
+    "StudentAlreadyPausedError",
+    "StudentNotPausedError",
+    "PauseResumeStudentInactiveError",
 ]

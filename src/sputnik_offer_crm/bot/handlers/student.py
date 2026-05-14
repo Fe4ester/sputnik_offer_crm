@@ -41,6 +41,15 @@ async def show_my_progress(message: Message) -> None:
             )
             return
 
+        # Check if student is paused
+        if progress_info.student.is_paused:
+            await message.answer(
+                "⏸ Вы на паузе\n\n"
+                "Ваше обучение временно приостановлено.\n"
+                "Обратитесь к ментору для получения информации."
+            )
+            return
+
         # Format started_at date
         started_date = progress_info.progress.started_at.strftime("%d.%m.%Y")
 
@@ -65,6 +74,15 @@ async def show_my_deadlines(message: Message) -> None:
         if progress_info and not progress_info.student.is_active:
             await message.answer(
                 "ℹ️ Ваш доступ к боту приостановлен.\n\n"
+                "Обратитесь к ментору для получения информации."
+            )
+            return
+
+        # Check if student is paused
+        if progress_info and progress_info.student.is_paused:
+            await message.answer(
+                "⏸ Вы на паузе\n\n"
+                "Ваше обучение временно приостановлено.\n"
                 "Обратитесь к ментору для получения информации."
             )
             return
