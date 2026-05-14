@@ -10,6 +10,8 @@ from sputnik_offer_crm.services.mentor_deadline import (
     DeadlineManagementError,
     InvalidDeadlineDateError,
     MentorDeadlineService,
+    NoStagesFoundError,
+    StageDeadlinePreview,
     StudentHasNoProgressError as DeadlineStudentHasNoProgressError,
     StudentNotFoundError as DeadlineStudentNotFoundError,
 )
@@ -80,4 +82,6 @@ __all__ = [
     "DeadlineStudentNotFoundError",
     "DeadlineStudentHasNoProgressError",
     "InvalidDeadlineDateError",
+    "NoStagesFoundError",
+    "StageDeadlinePreview",
 ]

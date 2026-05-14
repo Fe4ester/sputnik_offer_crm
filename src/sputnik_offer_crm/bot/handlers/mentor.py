@@ -29,6 +29,7 @@ from sputnik_offer_crm.services import (
     MentorService,
     MentorStudentService,
     MoveToNextStageError,
+    NoStagesFoundError,
     StageNotFoundError,
     StageNotInDirectionError,
     StudentHasNoProgressError,
@@ -415,6 +416,12 @@ async def show_student_card(message: Message, student_id: int) -> None:
                 InlineKeyboardButton(
                     text="📅 Изменить дедлайн текущего этапа",
                     callback_data=f"change_deadline:{student_id}"
+                )
+            ],
+            [
+                InlineKeyboardButton(
+                    text="📋 Установить дедлайны для всех этапов",
+                    callback_data=f"bulk_deadlines:{student_id}"
                 )
             ],
         ]
@@ -1259,3 +1266,188 @@ async def handle_confirm_deadline(callback: CallbackQuery, state: FSMContext) ->
             )
         finally:
             await state.clear()
+
+
+@router.callback_query(F.data.startswith("bulk_deadlines:"))
+async def handle_bulk_deadlines_request(callback: CallbackQuery, state: FSMContext) -> None:
+    """Handle request to set bulk deadlines for all stages."""
+    await callback.answer()
+
+    student_id = int(callback.data.split(":", 1)[1])
+
+    async with get_session() as session:
+        # Check mentor access
+        mentor_service = MentorService(session)
+        try:
+            await mentor_service.check_mentor_access(callback.from_user.id)
+        except MentorNotFoundError:
+            await callback.message.edit_text("❌ Доступ запрещён. Вы не являетесь ментором.")
+            return
+
+        # Calculate deadlines for all stages
+        deadline_service = MentorDeadlineService(session)
+        try:
+            student, direction, previews = await deadline_service.calculate_all_stage_deadlines(
+                student_id
+            )
+        except DeadlineStudentNotFoundError:
+            await callback.message.edit_text(
+                "❌ Ученик не найден.",
+                reply_markup=get_mentor_menu_keyboard(),
+            )
+            return
+        except DeadlineStudentHasNoProgressError:
+            await callback.message.edit_text(
+                "❌ У ученика нет записи о прогрессе.",
+                reply_markup=get_mentor_menu_keyboard(),
+            )
+            return
+        except NoStagesFoundError:
+            await callback.message.edit_text(
+                "❌ Не найдено этапов для направления ученика.",
+                reply_markup=get_mentor_menu_keyboard(),
+            )
+            return
+        except Exception as e:
+            logger.error("Failed to calculate bulk deadlines", error=str(e))
+            await callback.message.edit_text(
+                "❌ Не удалось рассчитать дедлайны.",
+                reply_markup=get_mentor_menu_keyboard(),
+            )
+            return
+
+        # Show preview
+        student_name = student.first_name
+        if student.last_name:
+            student_name += f" {student.last_name}"
+
+        preview_text = (
+            f"📋 Установка дедлайнов для всех этапов\n\n"
+            f"👤 Ученик: {student_name}\n"
+            f"📚 Направление: {direction.name}\n\n"
+            f"Рассчитанные дедлайны:\n\n"
+        )
+
+        for preview in previews:
+            deadline_str = preview.calculated_deadline.strftime("%d.%m.%Y")
+            preview_text += f"📍 {preview.stage.title}\n"
+            preview_text += f"   📅 {deadline_str}\n\n"
+
+        preview_text += "Подтвердите установку дедлайнов:"
+
+        # Store preview data for confirmation
+        stage_deadlines = [
+            (preview.stage.id, preview.calculated_deadline.isoformat())
+            for preview in previews
+        ]
+
+        buttons = [
+            [
+                InlineKeyboardButton(
+                    text="✅ Подтвердить",
+                    callback_data=f"confirm_bulk:{student_id}"
+                ),
+                InlineKeyboardButton(
+                    text="❌ Отмена",
+                    callback_data=f"cancel_bulk:{student_id}"
+                ),
+            ]
+        ]
+
+        await callback.message.edit_text(
+            preview_text,
+            reply_markup=InlineKeyboardMarkup(inline_keyboard=buttons),
+        )
+
+        await state.update_data(student_id=student_id, stage_deadlines=stage_deadlines)
+        await state.set_state(MentorStudentViewStates.confirming_bulk_deadlines)
+
+
+@router.callback_query(MentorStudentViewStates.confirming_bulk_deadlines, F.data.startswith("confirm_bulk:"))
+async def handle_confirm_bulk_deadlines(callback: CallbackQuery, state: FSMContext) -> None:
+    """Handle confirmation of bulk deadlines."""
+    await callback.answer()
+
+    student_id = int(callback.data.split(":", 1)[1])
+
+    data = await state.get_data()
+    stage_deadlines_iso = data.get("stage_deadlines", [])
+
+    if not stage_deadlines_iso:
+        await callback.message.edit_text(
+            "❌ Ошибка: данные дедлайнов потеряны. Начните заново.",
+            reply_markup=get_mentor_menu_keyboard(),
+        )
+        await state.clear()
+        return
+
+    # Convert ISO dates back to date objects
+    stage_deadlines = [
+        (stage_id, date.fromisoformat(deadline_iso))
+        for stage_id, deadline_iso in stage_deadlines_iso
+    ]
+
+    async with get_session() as session:
+        # Check mentor access
+        mentor_service = MentorService(session)
+        try:
+            await mentor_service.check_mentor_access(callback.from_user.id)
+        except MentorNotFoundError:
+            await callback.message.edit_text("❌ Доступ запрещён.")
+            await state.clear()
+            return
+
+        # Set bulk deadlines
+        deadline_service = MentorDeadlineService(session)
+        try:
+            count = await deadline_service.set_all_stage_deadlines(
+                student_id, stage_deadlines
+            )
+
+            await callback.message.edit_text(
+                f"✅ Дедлайны успешно установлены!\n\n"
+                f"Установлено дедлайнов: {count}"
+            )
+
+            logger.info(
+                "Bulk deadlines set",
+                mentor_id=callback.from_user.id,
+                student_id=student_id,
+                count=count,
+            )
+
+            # Show updated card
+            await show_student_card(callback.message, student_id)
+
+        except DeadlineStudentNotFoundError:
+            await callback.message.edit_text(
+                "❌ Ученик не найден.",
+                reply_markup=get_mentor_menu_keyboard(),
+            )
+        except DeadlineStudentHasNoProgressError:
+            await callback.message.edit_text(
+                "❌ У ученика нет записи о прогрессе.",
+                reply_markup=get_mentor_menu_keyboard(),
+            )
+        except DeadlineManagementError as e:
+            logger.error("Failed to set bulk deadlines", error=str(e), exc_info=True)
+            await callback.message.edit_text(
+                "❌ Не удалось установить дедлайны.",
+                reply_markup=get_mentor_menu_keyboard(),
+            )
+        finally:
+            await state.clear()
+
+
+@router.callback_query(MentorStudentViewStates.confirming_bulk_deadlines, F.data.startswith("cancel_bulk:"))
+async def handle_cancel_bulk_deadlines(callback: CallbackQuery, state: FSMContext) -> None:
+    """Handle cancellation of bulk deadlines."""
+    await callback.answer()
+
+    student_id = int(callback.data.split(":", 1)[1])
+
+    await callback.message.edit_text("❌ Установка дедлайнов отменена.")
+    await state.clear()
+
+    # Show card again
+    await show_student_card(callback.message, student_id)

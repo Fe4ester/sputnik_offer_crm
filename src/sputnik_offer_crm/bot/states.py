@@ -29,6 +29,7 @@ class MentorStudentViewStates(StatesGroup):
     selecting_deadline_option = State()
     waiting_for_custom_deadline = State()
     confirming_deadline = State()
+    confirming_bulk_deadlines = State()
 
 
 class WeeklyReportStates(StatesGroup):
