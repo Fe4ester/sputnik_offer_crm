@@ -54,6 +54,12 @@ from sputnik_offer_crm.services.mentor_pause_resume import (
     StudentInactiveError as PauseResumeStudentInactiveError,
     StudentNotPausedError,
 )
+from sputnik_offer_crm.services.notification import (
+    DeadlineReminder,
+    NotificationRecipient,
+    NotificationService,
+    WeeklyReportReminder,
+)
 from sputnik_offer_crm.services.registration import (
     DirectionHasNoStagesError,
     InviteCodeAlreadyUsedError,
@@ -120,4 +126,8 @@ __all__ = [
     "StudentAlreadyPausedError",
     "StudentNotPausedError",
     "PauseResumeStudentInactiveError",
+    "NotificationService",
+    "NotificationRecipient",
+    "WeeklyReportReminder",
+    "DeadlineReminder",
 ]
