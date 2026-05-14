@@ -33,6 +33,14 @@ async def show_my_progress(message: Message) -> None:
             )
             return
 
+        # Check if student is active
+        if not progress_info.student.is_active:
+            await message.answer(
+                "ℹ️ Ваш доступ к боту приостановлен.\n\n"
+                "Обратитесь к ментору для получения информации."
+            )
+            return
+
         # Format started_at date
         started_date = progress_info.progress.started_at.strftime("%d.%m.%Y")
 
@@ -51,6 +59,16 @@ async def show_my_deadlines(message: Message) -> None:
     """Show student deadlines."""
     async with get_session() as session:
         service = StudentService(session)
+
+        # Check if student is active
+        progress_info = await service.get_student_progress(message.from_user.id)
+        if progress_info and not progress_info.student.is_active:
+            await message.answer(
+                "ℹ️ Ваш доступ к боту приостановлен.\n\n"
+                "Обратитесь к ментору для получения информации."
+            )
+            return
+
         deadlines = await service.get_student_deadlines(message.from_user.id)
 
         if not deadlines:

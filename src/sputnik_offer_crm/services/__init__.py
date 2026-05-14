@@ -33,6 +33,12 @@ from sputnik_offer_crm.services.mentor_student import (
     StudentCardInfo,
     StudentSearchResult,
 )
+from sputnik_offer_crm.services.mentor_student_status import (
+    MentorStudentStatusService,
+    StudentAlreadyInactiveError,
+    StudentNotFoundError as StatusStudentNotFoundError,
+    StudentStatusManagementError,
+)
 from sputnik_offer_crm.services.registration import (
     DirectionHasNoStagesError,
     InviteCodeAlreadyUsedError,
@@ -84,4 +90,8 @@ __all__ = [
     "InvalidDeadlineDateError",
     "NoStagesFoundError",
     "StageDeadlinePreview",
+    "MentorStudentStatusService",
+    "StudentStatusManagementError",
+    "StatusStudentNotFoundError",
+    "StudentAlreadyInactiveError",
 ]

@@ -28,12 +28,16 @@ from sputnik_offer_crm.services import (
     MentorProgressService,
     MentorService,
     MentorStudentService,
+    MentorStudentStatusService,
     MoveToNextStageError,
     NoStagesFoundError,
     StageNotFoundError,
     StageNotInDirectionError,
+    StatusStudentNotFoundError,
+    StudentAlreadyInactiveError,
     StudentHasNoProgressError,
     StudentNotFoundError as ProgressStudentNotFoundError,
+    StudentStatusManagementError,
 )
 from sputnik_offer_crm.utils.logging import get_logger
 
@@ -422,6 +426,12 @@ async def show_student_card(message: Message, student_id: int) -> None:
                 InlineKeyboardButton(
                     text="📋 Установить дедлайны для всех этапов",
                     callback_data=f"bulk_deadlines:{student_id}"
+                )
+            ],
+            [
+                InlineKeyboardButton(
+                    text="❌ Отчислить",
+                    callback_data=f"dropout:{student_id}"
                 )
             ],
         ]
@@ -1447,6 +1457,159 @@ async def handle_cancel_bulk_deadlines(callback: CallbackQuery, state: FSMContex
     student_id = int(callback.data.split(":", 1)[1])
 
     await callback.message.edit_text("❌ Установка дедлайнов отменена.")
+    await state.clear()
+
+    # Show card again
+    await show_student_card(callback.message, student_id)
+
+
+@router.callback_query(F.data.startswith("dropout:"))
+async def handle_dropout_request(callback: CallbackQuery, state: FSMContext) -> None:
+    """Handle request to dropout student."""
+    await callback.answer()
+
+    student_id = int(callback.data.split(":", 1)[1])
+
+    async with get_session() as session:
+        # Check mentor access
+        mentor_service = MentorService(session)
+        try:
+            await mentor_service.check_mentor_access(callback.from_user.id)
+        except MentorNotFoundError:
+            await callback.message.edit_text("❌ Доступ запрещён. Вы не являетесь ментором.")
+            return
+
+        # Get student info
+        from sputnik_offer_crm.models import Student
+        from sqlalchemy import select
+
+        result = await session.execute(
+            select(Student).where(Student.id == student_id)
+        )
+        student = result.scalar_one_or_none()
+
+        if not student:
+            await callback.message.edit_text(
+                "❌ Ученик не найден.",
+                reply_markup=get_mentor_menu_keyboard(),
+            )
+            return
+
+        if not student.is_active:
+            await callback.message.edit_text(
+                "ℹ️ Ученик уже отчислен.",
+                reply_markup=get_mentor_menu_keyboard(),
+            )
+            return
+
+        # Show confirmation
+        student_name = student.first_name
+        if student.last_name:
+            student_name += f" {student.last_name}"
+
+        confirmation_text = (
+            f"❌ Отчисление ученика\n\n"
+            f"👤 Ученик: {student_name}\n\n"
+            f"⚠️ Внимание:\n"
+            f"• Ученик будет отчислен\n"
+            f"• Все данные (прогресс, отчёты, задачи) сохранятся\n"
+            f"• Ученик не сможет использовать активные функции бота\n\n"
+            f"Подтвердите отчисление:"
+        )
+
+        buttons = [
+            [
+                InlineKeyboardButton(
+                    text="✅ Подтвердить отчисление",
+                    callback_data=f"confirm_dropout:{student_id}"
+                ),
+            ],
+            [
+                InlineKeyboardButton(
+                    text="❌ Отмена",
+                    callback_data=f"cancel_dropout:{student_id}"
+                ),
+            ],
+        ]
+
+        await callback.message.edit_text(
+            confirmation_text,
+            reply_markup=InlineKeyboardMarkup(inline_keyboard=buttons),
+        )
+
+        await state.update_data(student_id=student_id)
+        await state.set_state(MentorStudentViewStates.confirming_dropout)
+
+
+@router.callback_query(MentorStudentViewStates.confirming_dropout, F.data.startswith("confirm_dropout:"))
+async def handle_confirm_dropout(callback: CallbackQuery, state: FSMContext) -> None:
+    """Handle confirmation of student dropout."""
+    await callback.answer()
+
+    student_id = int(callback.data.split(":", 1)[1])
+
+    async with get_session() as session:
+        # Check mentor access
+        mentor_service = MentorService(session)
+        try:
+            await mentor_service.check_mentor_access(callback.from_user.id)
+        except MentorNotFoundError:
+            await callback.message.edit_text("❌ Доступ запрещён.")
+            await state.clear()
+            return
+
+        # Perform dropout
+        status_service = MentorStudentStatusService(session)
+        try:
+            student = await status_service.dropout_student(student_id)
+
+            student_name = student.first_name
+            if student.last_name:
+                student_name += f" {student.last_name}"
+
+            await callback.message.edit_text(
+                f"✅ Ученик отчислен\n\n"
+                f"👤 {student_name}\n\n"
+                f"Все данные сохранены."
+            )
+
+            logger.info(
+                "Student dropped out",
+                mentor_id=callback.from_user.id,
+                student_id=student_id,
+            )
+
+            # Show updated card
+            await show_student_card(callback.message, student_id)
+
+        except StatusStudentNotFoundError:
+            await callback.message.edit_text(
+                "❌ Ученик не найден.",
+                reply_markup=get_mentor_menu_keyboard(),
+            )
+        except StudentAlreadyInactiveError:
+            await callback.message.edit_text(
+                "ℹ️ Ученик уже отчислен.",
+                reply_markup=get_mentor_menu_keyboard(),
+            )
+        except StudentStatusManagementError as e:
+            logger.error("Failed to dropout student", error=str(e), exc_info=True)
+            await callback.message.edit_text(
+                "❌ Не удалось отчислить ученика.",
+                reply_markup=get_mentor_menu_keyboard(),
+            )
+        finally:
+            await state.clear()
+
+
+@router.callback_query(MentorStudentViewStates.confirming_dropout, F.data.startswith("cancel_dropout:"))
+async def handle_cancel_dropout(callback: CallbackQuery, state: FSMContext) -> None:
+    """Handle cancellation of student dropout."""
+    await callback.answer()
+
+    student_id = int(callback.data.split(":", 1)[1])
+
+    await callback.message.edit_text("❌ Отчисление отменено.")
     await state.clear()
 
     # Show card again
