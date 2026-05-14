@@ -3,7 +3,7 @@
 import structlog
 from aiogram import F, Router
 from aiogram.fsm.context import FSMContext
-from aiogram.types import Message, ReplyKeyboardRemove
+from aiogram.types import CallbackQuery, Message, ReplyKeyboardRemove
 
 from sputnik_offer_crm.bot.keyboards.student import (
     get_skip_keyboard,
@@ -274,12 +274,13 @@ async def handle_my_tasks(message: Message) -> None:
                 )
                 return
 
-            # Build tasks list
+            # Build tasks list with inline buttons for open tasks
             lines = ["📌 Ваши задачи\n"]
+            buttons = []
 
             for i, task in enumerate(tasks, 1):
                 lines.append(f"{i}. {task.title}")
-                
+
                 # Status emoji
                 if task.status == "done":
                     status_emoji = "✅"
@@ -293,25 +294,41 @@ async def handle_my_tasks(message: Message) -> None:
                 else:  # open
                     status_emoji = "📌"
                     status_text = "Открыта"
-                
+
                 lines.append(f"   {status_emoji} Статус: {status_text}")
-                
+
                 if task.deadline:
                     deadline_str = task.deadline.strftime("%d.%m.%Y")
                     lines.append(f"   📅 Дедлайн: {deadline_str}")
-                
+
                 if task.description:
                     # Truncate long descriptions
                     desc = task.description
                     if len(desc) > 100:
                         desc = desc[:100] + "..."
                     lines.append(f"   📄 {desc}")
-                
+
+                # Add complete button for open tasks
+                if task.status == "open":
+                    from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup
+                    buttons.append([
+                        InlineKeyboardButton(
+                            text=f"✅ Выполнить #{i}",
+                            callback_data=f"complete_task:{task.id}"
+                        )
+                    ])
+
                 lines.append("")
+
+            # Create keyboard if there are buttons
+            keyboard = None
+            if buttons:
+                from aiogram.types import InlineKeyboardMarkup
+                keyboard = InlineKeyboardMarkup(inline_keyboard=buttons)
 
             await message.answer(
                 "\n".join(lines),
-                reply_markup=get_student_menu_keyboard(),
+                reply_markup=keyboard,
             )
 
             logger.info(
@@ -331,3 +348,45 @@ async def handle_my_tasks(message: Message) -> None:
                 "❌ Не удалось загрузить задачи. Попробуйте позже.",
                 reply_markup=get_student_menu_keyboard(),
             )
+
+
+@router.callback_query(F.data.startswith("complete_task:"))
+async def handle_complete_task(callback: CallbackQuery) -> None:
+    """Handle task completion by student."""
+    await callback.answer()
+
+    task_id = int(callback.data.split(":", 1)[1])
+
+    async with get_session() as session:
+        from sputnik_offer_crm.services.student_task import (
+            StudentTaskService,
+            TaskNotFoundError,
+            TaskAlreadyCompletedError,
+            InvalidTaskTransitionError,
+        )
+
+        service = StudentTaskService(session)
+        try:
+            task = await service.complete_task(task_id, callback.from_user.id)
+
+            await callback.message.edit_text(
+                f"✅ Задача выполнена!\n\n"
+                f"📝 {task.title}\n"
+                f"🎉 Отличная работа!"
+            )
+
+            logger.info(
+                "Student completed task",
+                student_id=callback.from_user.id,
+                task_id=task_id,
+            )
+
+        except TaskNotFoundError:
+            await callback.message.edit_text("❌ Задача не найдена.")
+        except TaskAlreadyCompletedError:
+            await callback.message.edit_text("ℹ️ Эта задача уже выполнена.")
+        except InvalidTaskTransitionError:
+            await callback.message.edit_text("❌ Невозможно выполнить эту задачу.")
+        except Exception as e:
+            logger.error("Failed to complete task", error=str(e), exc_info=True)
+            await callback.message.edit_text("❌ Не удалось выполнить задачу.")

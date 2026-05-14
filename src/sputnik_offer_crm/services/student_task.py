@@ -1,6 +1,6 @@
 """Student task management service."""
 
-from datetime import date
+from datetime import date, datetime, timezone
 from typing import NamedTuple
 
 from sqlalchemy import select
@@ -30,6 +30,18 @@ class StudentNotFoundError(StudentTaskError):
 
 class TaskNotFoundError(StudentTaskError):
     """Task not found."""
+
+
+class TaskAlreadyCompletedError(StudentTaskError):
+    """Task is already completed."""
+
+
+class TaskAlreadyCancelledError(StudentTaskError):
+    """Task is already cancelled."""
+
+
+class InvalidTaskTransitionError(StudentTaskError):
+    """Invalid task status transition."""
 
 
 class StudentTaskService:
@@ -153,3 +165,112 @@ class StudentTaskService:
             raise StudentNotFoundError(f"Student with telegram_id {telegram_id} not found")
 
         return await self.get_student_tasks(student.id)
+
+    async def complete_task(self, task_id: int, student_telegram_id: int) -> StudentTask:
+        """
+        Mark task as completed by student.
+
+        Args:
+            task_id: task ID
+            student_telegram_id: student telegram ID (for verification)
+
+        Returns:
+            Updated task
+
+        Raises:
+            TaskNotFoundError: if task not found
+            InvalidTaskTransitionError: if task cannot be completed
+        """
+        # Get task
+        result = await self.session.execute(
+            select(StudentTask).where(StudentTask.id == task_id)
+        )
+        task = result.scalar_one_or_none()
+
+        if not task:
+            raise TaskNotFoundError(f"Task {task_id} not found")
+
+        # Verify task belongs to student
+        result = await self.session.execute(
+            select(Student).where(
+                Student.id == task.student_id,
+                Student.telegram_id == student_telegram_id,
+            )
+        )
+        student = result.scalar_one_or_none()
+
+        if not student:
+            raise TaskNotFoundError(f"Task {task_id} not found for this student")
+
+        # Check current status
+        if task.status == TaskStatus.DONE.value:
+            raise TaskAlreadyCompletedError(f"Task {task_id} is already completed")
+
+        if task.status == TaskStatus.CANCELLED.value:
+            raise InvalidTaskTransitionError(
+                f"Cannot complete cancelled task {task_id}"
+            )
+
+        # Mark as done
+        task.status = TaskStatus.DONE.value
+        task.completed_at = datetime.now(timezone.utc)
+
+        await self.session.commit()
+        await self.session.refresh(task)
+
+        return task
+
+    async def cancel_task(self, task_id: int) -> StudentTask:
+        """
+        Cancel task (mentor action).
+
+        Args:
+            task_id: task ID
+
+        Returns:
+            Updated task
+
+        Raises:
+            TaskNotFoundError: if task not found
+            InvalidTaskTransitionError: if task cannot be cancelled
+        """
+        # Get task
+        result = await self.session.execute(
+            select(StudentTask).where(StudentTask.id == task_id)
+        )
+        task = result.scalar_one_or_none()
+
+        if not task:
+            raise TaskNotFoundError(f"Task {task_id} not found")
+
+        # Check current status
+        if task.status == TaskStatus.CANCELLED.value:
+            raise TaskAlreadyCancelledError(f"Task {task_id} is already cancelled")
+
+        if task.status == TaskStatus.DONE.value:
+            raise InvalidTaskTransitionError(
+                f"Cannot cancel completed task {task_id}"
+            )
+
+        # Mark as cancelled
+        task.status = TaskStatus.CANCELLED.value
+
+        await self.session.commit()
+        await self.session.refresh(task)
+
+        return task
+
+    async def get_task(self, task_id: int) -> StudentTask | None:
+        """
+        Get task by ID.
+
+        Args:
+            task_id: task ID
+
+        Returns:
+            Task or None if not found
+        """
+        result = await self.session.execute(
+            select(StudentTask).where(StudentTask.id == task_id)
+        )
+        return result.scalar_one_or_none()

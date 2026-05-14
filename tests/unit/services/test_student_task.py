@@ -9,6 +9,10 @@ from sputnik_offer_crm.models import Student, StudentStatus, StudentTask
 from sputnik_offer_crm.services.student_task import (
     StudentNotFoundError,
     StudentTaskService,
+    TaskNotFoundError,
+    TaskAlreadyCompletedError,
+    TaskAlreadyCancelledError,
+    InvalidTaskTransitionError,
 )
 
 
@@ -222,3 +226,223 @@ async def test_create_and_get_task_integration(
     assert tasks[0].description == "Test description"
     assert tasks[0].deadline == deadline
     assert tasks[0].status == "open"
+
+
+@pytest.mark.asyncio
+async def test_complete_task_success(
+    service: StudentTaskService,
+    student: Student,
+    db_session: AsyncSession,
+) -> None:
+    """Test completing task successfully."""
+    # Create task
+    task = StudentTask(
+        student_id=student.id,
+        title="Task to complete",
+        status="open",
+    )
+    db_session.add(task)
+    await db_session.commit()
+    await db_session.refresh(task)
+
+    # Complete task
+    completed_task = await service.complete_task(task.id, student.telegram_id)
+
+    assert completed_task.status == "done"
+    assert completed_task.completed_at is not None
+
+
+@pytest.mark.asyncio
+async def test_complete_task_not_found(
+    service: StudentTaskService,
+    student: Student,
+) -> None:
+    """Test error when task not found."""
+    with pytest.raises(TaskNotFoundError):
+        await service.complete_task(99999, student.telegram_id)
+
+
+@pytest.mark.asyncio
+async def test_complete_task_wrong_student(
+    service: StudentTaskService,
+    student: Student,
+    db_session: AsyncSession,
+) -> None:
+    """Test error when task belongs to different student."""
+    # Create another student
+    other_student = Student(
+        telegram_id=987654321,
+        first_name="Other",
+        last_name="Student",
+        username="otherstudent",
+        timezone="Europe/Moscow",
+    )
+    other_student.set_status(StudentStatus.ACTIVE)
+    db_session.add(other_student)
+    await db_session.commit()
+    await db_session.refresh(other_student)
+
+    # Create task for other student
+    task = StudentTask(
+        student_id=other_student.id,
+        title="Task",
+        status="open",
+    )
+    db_session.add(task)
+    await db_session.commit()
+    await db_session.refresh(task)
+
+    # Try to complete with wrong student
+    with pytest.raises(TaskNotFoundError):
+        await service.complete_task(task.id, student.telegram_id)
+
+
+@pytest.mark.asyncio
+async def test_complete_task_already_completed(
+    service: StudentTaskService,
+    student: Student,
+    db_session: AsyncSession,
+) -> None:
+    """Test error when task already completed."""
+    # Create completed task
+    task = StudentTask(
+        student_id=student.id,
+        title="Task",
+        status="done",
+    )
+    db_session.add(task)
+    await db_session.commit()
+    await db_session.refresh(task)
+
+    with pytest.raises(TaskAlreadyCompletedError):
+        await service.complete_task(task.id, student.telegram_id)
+
+
+@pytest.mark.asyncio
+async def test_complete_task_already_cancelled(
+    service: StudentTaskService,
+    student: Student,
+    db_session: AsyncSession,
+) -> None:
+    """Test error when trying to complete cancelled task."""
+    # Create cancelled task
+    task = StudentTask(
+        student_id=student.id,
+        title="Task",
+        status="cancelled",
+    )
+    db_session.add(task)
+    await db_session.commit()
+    await db_session.refresh(task)
+
+    with pytest.raises(InvalidTaskTransitionError):
+        await service.complete_task(task.id, student.telegram_id)
+
+
+@pytest.mark.asyncio
+async def test_cancel_task_success(
+    service: StudentTaskService,
+    student: Student,
+    db_session: AsyncSession,
+) -> None:
+    """Test cancelling task successfully."""
+    # Create task
+    task = StudentTask(
+        student_id=student.id,
+        title="Task to cancel",
+        status="open",
+    )
+    db_session.add(task)
+    await db_session.commit()
+    await db_session.refresh(task)
+
+    # Cancel task
+    cancelled_task = await service.cancel_task(task.id)
+
+    assert cancelled_task.status == "cancelled"
+    assert cancelled_task.completed_at is None
+
+
+@pytest.mark.asyncio
+async def test_cancel_task_not_found(
+    service: StudentTaskService,
+) -> None:
+    """Test error when task not found."""
+    with pytest.raises(TaskNotFoundError):
+        await service.cancel_task(99999)
+
+
+@pytest.mark.asyncio
+async def test_cancel_task_already_cancelled(
+    service: StudentTaskService,
+    student: Student,
+    db_session: AsyncSession,
+) -> None:
+    """Test error when task already cancelled."""
+    # Create cancelled task
+    task = StudentTask(
+        student_id=student.id,
+        title="Task",
+        status="cancelled",
+    )
+    db_session.add(task)
+    await db_session.commit()
+    await db_session.refresh(task)
+
+    with pytest.raises(TaskAlreadyCancelledError):
+        await service.cancel_task(task.id)
+
+
+@pytest.mark.asyncio
+async def test_cancel_task_already_completed(
+    service: StudentTaskService,
+    student: Student,
+    db_session: AsyncSession,
+) -> None:
+    """Test error when trying to cancel completed task."""
+    # Create completed task
+    task = StudentTask(
+        student_id=student.id,
+        title="Task",
+        status="done",
+    )
+    db_session.add(task)
+    await db_session.commit()
+    await db_session.refresh(task)
+
+    with pytest.raises(InvalidTaskTransitionError):
+        await service.cancel_task(task.id)
+
+
+@pytest.mark.asyncio
+async def test_get_task_success(
+    service: StudentTaskService,
+    student: Student,
+    db_session: AsyncSession,
+) -> None:
+    """Test getting task by ID."""
+    # Create task
+    task = StudentTask(
+        student_id=student.id,
+        title="Test task",
+        status="open",
+    )
+    db_session.add(task)
+    await db_session.commit()
+    await db_session.refresh(task)
+
+    # Get task
+    retrieved_task = await service.get_task(task.id)
+
+    assert retrieved_task is not None
+    assert retrieved_task.id == task.id
+    assert retrieved_task.title == "Test task"
+
+
+@pytest.mark.asyncio
+async def test_get_task_not_found(
+    service: StudentTaskService,
+) -> None:
+    """Test getting non-existent task."""
+    task = await service.get_task(99999)
+    assert task is None

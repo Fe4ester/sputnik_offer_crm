@@ -470,6 +470,12 @@ async def show_student_card(message: Message, student_id: int) -> None:
                     callback_data=f"add_task:{student_id}"
                 )
             ],
+            [
+                InlineKeyboardButton(
+                    text="📋 Задачи ученика",
+                    callback_data=f"view_student_tasks:{student_id}"
+                )
+            ],
         ]
 
         # Add pause/resume button based on current state
@@ -2548,4 +2554,173 @@ async def handle_cancel_add_task(callback: CallbackQuery, state: FSMContext) -> 
     await state.clear()
 
     # Show card again
+    await show_student_card(callback.message, student_id)
+
+
+@router.callback_query(F.data.startswith("view_student_tasks:"))
+async def handle_view_student_tasks(callback: CallbackQuery) -> None:
+    """Handle viewing student tasks."""
+    await callback.answer()
+
+    student_id = int(callback.data.split(":", 1)[1])
+
+    async with get_session() as session:
+        # Check mentor access
+        mentor_service = MentorService(session)
+        try:
+            await mentor_service.check_mentor_access(callback.from_user.id)
+        except MentorNotFoundError:
+            await callback.message.edit_text("❌ Доступ запрещён. Вы не являетесь ментором.")
+            return
+
+        from sputnik_offer_crm.services.student_task import StudentTaskService, StudentNotFoundError
+
+        service = StudentTaskService(session)
+        try:
+            tasks = await service.get_student_tasks(student_id)
+
+            if not tasks:
+                await callback.message.edit_text(
+                    "📋 У ученика пока нет задач.",
+                    reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+                        [InlineKeyboardButton(text="◀️ Назад", callback_data=f"back_to_card:{student_id}")]
+                    ]),
+                )
+                return
+
+            # Build tasks list with cancel buttons
+            lines = ["📋 Задачи ученика\n"]
+            buttons = []
+
+            for i, task in enumerate(tasks, 1):
+                lines.append(f"{i}. {task.title}")
+
+                # Status emoji
+                if task.status == "done":
+                    status_emoji = "✅"
+                    status_text = "Выполнена"
+                elif task.status == "cancelled":
+                    status_emoji = "❌"
+                    status_text = "Отменена"
+                elif task.status == "overdue":
+                    status_emoji = "⚠️"
+                    status_text = "Просрочена"
+                else:  # open
+                    status_emoji = "📌"
+                    status_text = "Открыта"
+
+                lines.append(f"   {status_emoji} Статус: {status_text}")
+
+                if task.deadline:
+                    deadline_str = task.deadline.strftime("%d.%m.%Y")
+                    lines.append(f"   📅 Дедлайн: {deadline_str}")
+
+                if task.description:
+                    desc = task.description
+                    if len(desc) > 100:
+                        desc = desc[:100] + "..."
+                    lines.append(f"   📄 {desc}")
+
+                if task.mentor_task:
+                    mentor_note = task.mentor_task
+                    if len(mentor_note) > 100:
+                        mentor_note = mentor_note[:100] + "..."
+                    lines.append(f"   📋 Заметка: {mentor_note}")
+
+                # Add cancel button for open tasks
+                if task.status == "open":
+                    buttons.append([
+                        InlineKeyboardButton(
+                            text=f"❌ Отменить #{i}",
+                            callback_data=f"cancel_student_task:{task.id}:{student_id}"
+                        )
+                    ])
+
+                lines.append("")
+
+            # Add back button
+            buttons.append([
+                InlineKeyboardButton(text="◀️ Назад", callback_data=f"back_to_card:{student_id}")
+            ])
+
+            await callback.message.edit_text(
+                "\n".join(lines),
+                reply_markup=InlineKeyboardMarkup(inline_keyboard=buttons),
+            )
+
+            logger.info(
+                "Mentor viewed student tasks",
+                mentor_id=callback.from_user.id,
+                student_id=student_id,
+                tasks_count=len(tasks),
+            )
+
+        except StudentNotFoundError:
+            await callback.message.edit_text("❌ Ученик не найден.")
+        except Exception as e:
+            logger.error("Failed to get student tasks", error=str(e), exc_info=True)
+            await callback.message.edit_text("❌ Не удалось загрузить задачи.")
+
+
+@router.callback_query(F.data.startswith("cancel_student_task:"))
+async def handle_cancel_student_task(callback: CallbackQuery) -> None:
+    """Handle cancelling student task."""
+    await callback.answer()
+
+    parts = callback.data.split(":", 2)
+    task_id = int(parts[1])
+    student_id = int(parts[2])
+
+    async with get_session() as session:
+        # Check mentor access
+        mentor_service = MentorService(session)
+        try:
+            await mentor_service.check_mentor_access(callback.from_user.id)
+        except MentorNotFoundError:
+            await callback.message.edit_text("❌ Доступ запрещён. Вы не являетесь ментором.")
+            return
+
+        from sputnik_offer_crm.services.student_task import (
+            StudentTaskService,
+            TaskNotFoundError,
+            TaskAlreadyCancelledError,
+            InvalidTaskTransitionError,
+        )
+
+        service = StudentTaskService(session)
+        try:
+            task = await service.cancel_task(task_id)
+
+            await callback.message.edit_text(
+                f"✅ Задача отменена\n\n"
+                f"📝 {task.title}"
+            )
+
+            logger.info(
+                "Mentor cancelled task",
+                mentor_id=callback.from_user.id,
+                task_id=task_id,
+                student_id=student_id,
+            )
+
+        except TaskNotFoundError:
+            await callback.message.edit_text("❌ Задача не найдена.")
+        except TaskAlreadyCancelledError:
+            await callback.message.edit_text("ℹ️ Эта задача уже отменена.")
+        except InvalidTaskTransitionError:
+            await callback.message.edit_text("❌ Невозможно отменить выполненную задачу.")
+        except Exception as e:
+            logger.error("Failed to cancel task", error=str(e), exc_info=True)
+            await callback.message.edit_text("❌ Не удалось отменить задачу.")
+
+    # Show tasks list again
+    await handle_view_student_tasks(callback)
+
+
+@router.callback_query(F.data.startswith("back_to_card:"))
+async def handle_back_to_card(callback: CallbackQuery) -> None:
+    """Handle back to student card."""
+    await callback.answer()
+
+    student_id = int(callback.data.split(":", 1)[1])
     await show_student_card(callback.message, student_id)
