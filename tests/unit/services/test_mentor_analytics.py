@@ -51,15 +51,15 @@ async def stage(db_session: AsyncSession, direction: Direction) -> Stage:
 @pytest.fixture
 async def active_student(db_session: AsyncSession) -> Student:
     """Create active student."""
+    from sputnik_offer_crm.models import StudentStatus
     student = Student(
         telegram_id=123456789,
         first_name="Active",
         last_name="Student",
         username="activestudent",
         timezone="Europe/Moscow",
-        is_active=True,
-        is_paused=False,
     )
+    student.set_status(StudentStatus.ACTIVE)
     db_session.add(student)
     await db_session.commit()
     await db_session.refresh(student)
@@ -69,15 +69,15 @@ async def active_student(db_session: AsyncSession) -> Student:
 @pytest.fixture
 async def paused_student(db_session: AsyncSession) -> Student:
     """Create paused student."""
+    from sputnik_offer_crm.models import StudentStatus
     student = Student(
         telegram_id=987654321,
         first_name="Paused",
         last_name="Student",
         username="pausedstudent",
         timezone="Europe/Moscow",
-        is_active=True,
-        is_paused=True,
     )
+    student.set_status(StudentStatus.PAUSED)
     db_session.add(student)
     await db_session.commit()
     await db_session.refresh(student)
@@ -87,15 +87,15 @@ async def paused_student(db_session: AsyncSession) -> Student:
 @pytest.fixture
 async def dropped_student(db_session: AsyncSession) -> Student:
     """Create dropped student."""
+    from sputnik_offer_crm.models import StudentStatus
     student = Student(
         telegram_id=111222333,
         first_name="Dropped",
         last_name="Student",
         username="droppedstudent",
         timezone="Europe/Moscow",
-        is_active=False,
-        is_paused=False,
     )
+    student.set_status(StudentStatus.DROPPED)
     db_session.add(student)
     await db_session.commit()
     await db_session.refresh(student)
@@ -105,18 +105,18 @@ async def dropped_student(db_session: AsyncSession) -> Student:
 @pytest.fixture
 async def completed_student(db_session: AsyncSession) -> Student:
     """Create completed student with offer."""
+    from sputnik_offer_crm.models import StudentStatus
     student = Student(
         telegram_id=444555666,
         first_name="Completed",
         last_name="Student",
         username="completedstudent",
         timezone="Europe/Moscow",
-        is_active=True,
-        is_paused=False,
         offer_company="Test Company",
         offer_position="Developer",
         offer_received_at=datetime.now(pytz.UTC),
     )
+    student.set_status(StudentStatus.ACTIVE)
     db_session.add(student)
     await db_session.commit()
     await db_session.refresh(student)
@@ -193,21 +193,20 @@ async def test_get_stage_progress_with_students(
     db_session: AsyncSession,
 ) -> None:
     """Test getting stage progress with students."""
-    # Create progress for active students
-    for student in [active_student, paused_student]:
-        progress = StudentProgress(
-            student_id=student.id,
-            direction_id=direction.id,
-            current_stage_id=stage.id,
-            started_at=datetime.now(pytz.UTC),
-        )
-        db_session.add(progress)
+    # Create progress for active student only (paused students are excluded)
+    progress = StudentProgress(
+        student_id=active_student.id,
+        direction_id=direction.id,
+        current_stage_id=stage.id,
+        started_at=datetime.now(pytz.UTC),
+    )
+    db_session.add(progress)
     await db_session.commit()
 
     progress_list = await service.get_stage_progress()
 
     assert len(progress_list) == 1
-    assert progress_list[0].students_count == 2
+    assert progress_list[0].students_count == 1  # Only active student counted
 
 
 @pytest.mark.asyncio

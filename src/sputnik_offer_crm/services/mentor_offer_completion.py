@@ -62,7 +62,7 @@ class MentorOfferCompletionService:
         if not student:
             raise OfferCompletionStudentNotFoundError(f"Student {student_id} not found")
 
-        if not student.is_active:
+        if student.is_dropped():
             raise StudentInactiveError(
                 f"Student {student_id} is inactive (dropped out)"
             )

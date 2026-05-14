@@ -79,14 +79,14 @@ class MentorAnalyticsService:
             students = students_result.scalars().all()
 
             total = len(students)
-            active = sum(1 for s in students if s.is_active and not s.is_paused)
-            paused = sum(1 for s in students if s.is_active and s.is_paused)
-            dropped = sum(1 for s in students if not s.is_active)
+            active = sum(1 for s in students if s.get_status().value == "active")
+            paused = sum(1 for s in students if s.get_status().value == "paused")
+            dropped = sum(1 for s in students if s.get_status().value == "dropped")
             # Completed students are those who are active AND have offer
             completed = sum(
                 1
                 for s in students
-                if s.is_active and not s.is_paused and s.offer_company is not None
+                if s.get_status().value == "active" and s.offer_company is not None
             )
 
             summaries.append(
@@ -120,14 +120,14 @@ class MentorAnalyticsService:
 
         progress_list = []
         for direction, stage in direction_stages:
-            # Count active students on this stage
+            # Count active students on this stage (not dropped, not paused)
             count_result = await self.session.execute(
                 select(func.count(StudentProgress.id))
                 .join(Student, Student.id == StudentProgress.student_id)
                 .where(
                     and_(
                         StudentProgress.current_stage_id == stage.id,
-                        Student.is_active == True,  # noqa: E712
+                        Student.status == "active",
                     )
                 )
             )
@@ -168,7 +168,7 @@ class MentorAnalyticsService:
             )
             .where(
                 and_(
-                    Student.is_active == True,  # noqa: E712
+                    Student.status == "active",
                     StudentStageProgress.planned_deadline.isnot(None),
                 )
             )

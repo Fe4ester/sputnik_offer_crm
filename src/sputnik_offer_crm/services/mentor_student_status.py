@@ -3,7 +3,7 @@
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from sputnik_offer_crm.models import Student
+from sputnik_offer_crm.models import Student, StudentStatus
 
 
 class StudentStatusManagementError(Exception):
@@ -29,7 +29,7 @@ class MentorStudentStatusService:
         Mark student as dropped (inactive).
 
         This operation:
-        1. Sets student.is_active = False
+        1. Sets student.status = 'dropped'
         2. Preserves all historical data (progress, reports, tasks, deadlines)
 
         Args:
@@ -42,7 +42,6 @@ class MentorStudentStatusService:
             StudentNotFoundError: if student not found
             StudentAlreadyInactiveError: if student is already inactive
         """
-        # Get student
         result = await self.session.execute(
             select(Student).where(Student.id == student_id)
         )
@@ -51,13 +50,12 @@ class MentorStudentStatusService:
         if not student:
             raise StudentNotFoundError(f"Student {student_id} not found")
 
-        if not student.is_active:
+        if student.is_dropped():
             raise StudentAlreadyInactiveError(
                 f"Student {student_id} is already inactive"
             )
 
-        # Mark as inactive (dropped)
-        student.is_active = False
+        student.set_status(StudentStatus.DROPPED)
 
         await self.session.commit()
 

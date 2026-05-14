@@ -123,14 +123,9 @@ class NotificationService:
             - have not submitted report for current week
             - have not received reminder today
         """
-        # Get all active, non-paused students
+        # Get all active students (not dropped, not paused)
         result = await self.session.execute(
-            select(Student).where(
-                and_(
-                    Student.is_active == True,  # noqa: E712
-                    Student.is_paused == False,  # noqa: E712
-                )
-            )
+            select(Student).where(Student.status == "active")
         )
         students = result.scalars().all()
 
@@ -204,16 +199,11 @@ class NotificationService:
             - overdue deadlines
             Only for active, non-paused students who haven't received reminder today.
         """
-        # Get all active, non-paused students with progress
+        # Get all active students with progress (not dropped, not paused)
         result = await self.session.execute(
             select(Student, StudentProgress)
             .join(StudentProgress, StudentProgress.student_id == Student.id)
-            .where(
-                and_(
-                    Student.is_active == True,  # noqa: E712
-                    Student.is_paused == False,  # noqa: E712
-                )
-            )
+            .where(Student.status == "active")
         )
         student_progress_pairs = result.all()
 

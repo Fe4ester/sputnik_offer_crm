@@ -23,14 +23,15 @@ def service(db_session: AsyncSession) -> MentorOfferCompletionService:
 @pytest.fixture
 async def active_student(db_session: AsyncSession) -> Student:
     """Create active student without offer."""
+    from sputnik_offer_crm.models import StudentStatus
     student = Student(
         telegram_id=123456789,
         first_name="Test",
         last_name="Student",
         username="teststudent",
         timezone="Europe/Moscow",
-        is_active=True,
     )
+    student.set_status(StudentStatus.ACTIVE)
     db_session.add(student)
     await db_session.commit()
     await db_session.refresh(student)
@@ -40,14 +41,15 @@ async def active_student(db_session: AsyncSession) -> Student:
 @pytest.fixture
 async def inactive_student(db_session: AsyncSession) -> Student:
     """Create inactive student."""
+    from sputnik_offer_crm.models import StudentStatus
     student = Student(
         telegram_id=987654321,
         first_name="Inactive",
         last_name="Student",
         username="inactivestudent",
         timezone="Europe/Moscow",
-        is_active=False,
     )
+    student.set_status(StudentStatus.DROPPED)
     db_session.add(student)
     await db_session.commit()
     await db_session.refresh(student)
@@ -57,17 +59,18 @@ async def inactive_student(db_session: AsyncSession) -> Student:
 @pytest.fixture
 async def completed_student(db_session: AsyncSession) -> Student:
     """Create student already completed with offer."""
+    from sputnik_offer_crm.models import StudentStatus
     student = Student(
         telegram_id=111222333,
         first_name="Completed",
         last_name="Student",
         username="completedstudent",
         timezone="Europe/Moscow",
-        is_active=True,
         offer_company="Test Company",
         offer_position="Test Position",
         offer_received_at=datetime.now(timezone.utc),
     )
+    student.set_status(StudentStatus.ACTIVE)
     db_session.add(student)
     await db_session.commit()
     await db_session.refresh(student)

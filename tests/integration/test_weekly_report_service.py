@@ -113,8 +113,9 @@ class TestWeeklyReportService:
         """Test can submit report when student is inactive."""
         service = WeeklyReportService(db_session)
 
-        # Make student inactive
-        student.is_active = False
+        # Make student inactive (dropped)
+        from sputnik_offer_crm.models import StudentStatus
+        student.set_status(StudentStatus.DROPPED)
         await db_session.commit()
 
         can_submit, error = await service.can_submit_report(student.telegram_id)

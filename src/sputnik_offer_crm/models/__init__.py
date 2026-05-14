@@ -6,6 +6,7 @@ from sputnik_offer_crm.models.mentor import Mentor
 from sputnik_offer_crm.models.notification_log import NotificationLog
 from sputnik_offer_crm.models.stage import Stage
 from sputnik_offer_crm.models.student import Student
+from sputnik_offer_crm.models.student_status import StudentStatus
 from sputnik_offer_crm.models.student_progress import StudentProgress
 from sputnik_offer_crm.models.student_stage_progress import (
     StageProgressStatus,
@@ -22,6 +23,7 @@ __all__ = [
     "NotificationLog",
     "Stage",
     "Student",
+    "StudentStatus",
     "StudentProgress",
     "StageProgressStatus",
     "StudentStageProgress",

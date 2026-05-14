@@ -3,7 +3,7 @@
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from sputnik_offer_crm.models import Student
+from sputnik_offer_crm.models import Student, StudentStatus
 
 
 class PauseResumeError(Exception):
@@ -37,10 +37,9 @@ class MentorPauseResumeService:
         Pause student.
 
         This operation:
-        1. Sets student.is_paused = True
-        2. Keeps student.is_active = True (not dropped out)
-        3. Preserves all historical data (progress, reports, tasks, deadlines)
-        4. Blocks active student-side actions (weekly reports, etc.)
+        1. Sets student.status = 'paused'
+        2. Preserves all historical data (progress, reports, tasks, deadlines)
+        3. Blocks active student-side actions (weekly reports, etc.)
 
         Args:
             student_id: student ID
@@ -61,15 +60,15 @@ class MentorPauseResumeService:
         if not student:
             raise PauseResumeStudentNotFoundError(f"Student {student_id} not found")
 
-        if not student.is_active:
+        if student.is_dropped():
             raise StudentInactiveError(
                 f"Student {student_id} is inactive (dropped out)"
             )
 
-        if student.is_paused:
+        if student.is_on_pause():
             raise StudentAlreadyPausedError(f"Student {student_id} is already paused")
 
-        student.is_paused = True
+        student.set_status(StudentStatus.PAUSED)
 
         await self.session.commit()
 
@@ -80,7 +79,7 @@ class MentorPauseResumeService:
         Resume student from pause.
 
         This operation:
-        1. Sets student.is_paused = False
+        1. Sets student.status = 'active'
         2. Restores active student-side actions
         3. Preserves all historical data
 
@@ -103,15 +102,15 @@ class MentorPauseResumeService:
         if not student:
             raise PauseResumeStudentNotFoundError(f"Student {student_id} not found")
 
-        if not student.is_active:
+        if student.is_dropped():
             raise StudentInactiveError(
                 f"Student {student_id} is inactive (dropped out)"
             )
 
-        if not student.is_paused:
+        if not student.is_on_pause():
             raise StudentNotPausedError(f"Student {student_id} is not paused")
 
-        student.is_paused = False
+        student.set_status(StudentStatus.ACTIVE)
 
         await self.session.commit()
 

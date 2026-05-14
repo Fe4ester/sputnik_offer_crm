@@ -175,8 +175,11 @@ class RegistrationService:
             last_name=last_name,
             username=username,
             timezone=timezone_str,
-            is_active=True,
         )
+        # Set status using the new method (will sync legacy fields)
+        from sputnik_offer_crm.models import StudentStatus
+        student.set_status(StudentStatus.ACTIVE)
+
         self.session.add(student)
         await self.session.flush()
 

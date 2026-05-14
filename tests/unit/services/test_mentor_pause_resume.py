@@ -22,15 +22,15 @@ def service(db_session: AsyncSession) -> MentorPauseResumeService:
 @pytest.fixture
 async def active_student(db_session: AsyncSession) -> Student:
     """Create active student not on pause."""
+    from sputnik_offer_crm.models import StudentStatus
     student = Student(
         telegram_id=123456789,
         first_name="Test",
         last_name="Student",
         username="teststudent",
         timezone="Europe/Moscow",
-        is_active=True,
-        is_paused=False,
     )
+    student.set_status(StudentStatus.ACTIVE)
     db_session.add(student)
     await db_session.commit()
     await db_session.refresh(student)
@@ -40,15 +40,15 @@ async def active_student(db_session: AsyncSession) -> Student:
 @pytest.fixture
 async def paused_student(db_session: AsyncSession) -> Student:
     """Create paused student."""
+    from sputnik_offer_crm.models import StudentStatus
     student = Student(
         telegram_id=987654321,
         first_name="Paused",
         last_name="Student",
         username="pausedstudent",
         timezone="Europe/Moscow",
-        is_active=True,
-        is_paused=True,
     )
+    student.set_status(StudentStatus.PAUSED)
     db_session.add(student)
     await db_session.commit()
     await db_session.refresh(student)
@@ -58,15 +58,15 @@ async def paused_student(db_session: AsyncSession) -> Student:
 @pytest.fixture
 async def inactive_student(db_session: AsyncSession) -> Student:
     """Create inactive (dropped out) student."""
+    from sputnik_offer_crm.models import StudentStatus
     student = Student(
         telegram_id=111222333,
         first_name="Inactive",
         last_name="Student",
         username="inactivestudent",
         timezone="Europe/Moscow",
-        is_active=False,
-        is_paused=False,
     )
+    student.set_status(StudentStatus.DROPPED)
     db_session.add(student)
     await db_session.commit()
     await db_session.refresh(student)
