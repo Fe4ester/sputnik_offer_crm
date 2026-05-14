@@ -6,6 +6,12 @@ from sputnik_offer_crm.services.mentor import (
     MentorService,
     NoActiveDirectionsError,
 )
+from sputnik_offer_crm.services.mentor_analytics import (
+    MentorAnalyticsService,
+    DirectionSummary,
+    StageProgress,
+    DeadlineInfo as AnalyticsDeadlineInfo,
+)
 from sputnik_offer_crm.services.mentor_deadline import (
     DeadlineManagementError,
     InvalidDeadlineDateError,
@@ -100,6 +106,10 @@ __all__ = [
     "MentorNotFoundError",
     "NoActiveDirectionsError",
     "InviteCodeGenerationError",
+    "MentorAnalyticsService",
+    "DirectionSummary",
+    "StageProgress",
+    "AnalyticsDeadlineInfo",
     "StudentService",
     "StudentProgressInfo",
     "DeadlineInfo",
