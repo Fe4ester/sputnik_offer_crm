@@ -254,3 +254,80 @@ async def submit_weekly_report(message: Message, state: FSMContext) -> None:
             )
         finally:
             await state.clear()
+
+
+@router.message(F.text == "📌 Мои задачи")
+async def handle_my_tasks(message: Message) -> None:
+    """Handle student tasks view request."""
+    async with get_session() as session:
+        from sputnik_offer_crm.services.student_task import StudentTaskService, StudentNotFoundError
+
+        service = StudentTaskService(session)
+        try:
+            tasks = await service.get_student_tasks_by_telegram_id(message.from_user.id)
+
+            if not tasks:
+                await message.answer(
+                    "📌 У вас пока нет задач.\n\n"
+                    "Ваш ментор может назначить вам задачи для выполнения.",
+                    reply_markup=get_student_menu_keyboard(),
+                )
+                return
+
+            # Build tasks list
+            lines = ["📌 Ваши задачи\n"]
+
+            for i, task in enumerate(tasks, 1):
+                lines.append(f"{i}. {task.title}")
+                
+                # Status emoji
+                if task.status == "done":
+                    status_emoji = "✅"
+                    status_text = "Выполнена"
+                elif task.status == "cancelled":
+                    status_emoji = "❌"
+                    status_text = "Отменена"
+                elif task.status == "overdue":
+                    status_emoji = "⚠️"
+                    status_text = "Просрочена"
+                else:  # open
+                    status_emoji = "📌"
+                    status_text = "Открыта"
+                
+                lines.append(f"   {status_emoji} Статус: {status_text}")
+                
+                if task.deadline:
+                    deadline_str = task.deadline.strftime("%d.%m.%Y")
+                    lines.append(f"   📅 Дедлайн: {deadline_str}")
+                
+                if task.description:
+                    # Truncate long descriptions
+                    desc = task.description
+                    if len(desc) > 100:
+                        desc = desc[:100] + "..."
+                    lines.append(f"   📄 {desc}")
+                
+                lines.append("")
+
+            await message.answer(
+                "\n".join(lines),
+                reply_markup=get_student_menu_keyboard(),
+            )
+
+            logger.info(
+                "Student viewed tasks",
+                student_id=message.from_user.id,
+                tasks_count=len(tasks),
+            )
+
+        except StudentNotFoundError:
+            await message.answer(
+                "❌ Ваш профиль не найден.",
+                reply_markup=get_student_menu_keyboard(),
+            )
+        except Exception as e:
+            logger.error("Failed to get student tasks", error=str(e), exc_info=True)
+            await message.answer(
+                "❌ Не удалось загрузить задачи. Попробуйте позже.",
+                reply_markup=get_student_menu_keyboard(),
+            )

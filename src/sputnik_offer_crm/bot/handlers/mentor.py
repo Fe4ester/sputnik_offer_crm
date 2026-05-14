@@ -12,7 +12,7 @@ from sputnik_offer_crm.bot.keyboards import (
     get_timezone_keyboard,
 )
 from sputnik_offer_crm.bot.keyboards.mentor import get_mentor_timezone_fallback_keyboard
-from sputnik_offer_crm.bot.states import MentorInviteCodeStates, MentorStudentViewStates
+from sputnik_offer_crm.bot.states import MentorInviteCodeStates, MentorStudentViewStates, MentorTaskCreationStates
 from sputnik_offer_crm.db import get_session
 from sputnik_offer_crm.services import (
     AlreadyOnFinalStageError,
@@ -462,6 +462,12 @@ async def show_student_card(message: Message, student_id: int) -> None:
                 InlineKeyboardButton(
                     text="✅ Завершить / получил оффер",
                     callback_data=f"offer_completion:{student_id}"
+                )
+            ],
+            [
+                InlineKeyboardButton(
+                    text="📌 Добавить задачу",
+                    callback_data=f"add_task:{student_id}"
                 )
             ],
         ]
@@ -2276,6 +2282,269 @@ async def handle_cancel_resume(callback: CallbackQuery, state: FSMContext) -> No
     student_id = int(callback.data.split(":", 1)[1])
 
     await callback.message.edit_text("❌ Возобновление отменено.")
+    await state.clear()
+
+    # Show card again
+    await show_student_card(callback.message, student_id)
+
+
+# Task creation handlers
+
+
+@router.callback_query(F.data.startswith("add_task:"))
+async def handle_add_task_request(callback: CallbackQuery, state: FSMContext) -> None:
+    """Handle request to add task to student."""
+    await callback.answer()
+
+    student_id = int(callback.data.split(":", 1)[1])
+
+    async with get_session() as session:
+        # Check mentor access
+        mentor_service = MentorService(session)
+        try:
+            await mentor_service.check_mentor_access(callback.from_user.id)
+        except MentorNotFoundError:
+            await callback.message.edit_text("❌ Доступ запрещён. Вы не являетесь ментором.")
+            return
+
+    # Save student_id to state
+    await state.update_data(student_id=student_id)
+    await state.set_state(MentorTaskCreationStates.waiting_for_title)
+
+    await callback.message.edit_text(
+        "📌 Создание задачи\n\n"
+        "Введите название задачи:",
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="❌ Отмена", callback_data=f"cancel_add_task:{student_id}")]
+        ]),
+    )
+
+
+@router.message(MentorTaskCreationStates.waiting_for_title)
+async def handle_task_title_input(message: Message, state: FSMContext) -> None:
+    """Handle task title input."""
+    title = message.text.strip()
+
+    if not title:
+        await message.answer("❌ Название задачи не может быть пустым. Попробуйте ещё раз:")
+        return
+
+    # Save title
+    await state.update_data(title=title)
+    await state.set_state(MentorTaskCreationStates.waiting_for_description)
+
+    data = await state.get_data()
+    student_id = data["student_id"]
+
+    await message.answer(
+        f"✅ Название: {title}\n\n"
+        "Введите описание задачи или нажмите 'Пропустить':",
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="⏭ Пропустить", callback_data="skip_task_description")],
+            [InlineKeyboardButton(text="❌ Отмена", callback_data=f"cancel_add_task:{student_id}")]
+        ]),
+    )
+
+
+@router.callback_query(MentorTaskCreationStates.waiting_for_description, F.data == "skip_task_description")
+async def handle_skip_task_description(callback: CallbackQuery, state: FSMContext) -> None:
+    """Handle skipping task description."""
+    await callback.answer()
+
+    await state.update_data(description=None)
+    await state.set_state(MentorTaskCreationStates.waiting_for_deadline)
+
+    data = await state.get_data()
+    student_id = data["student_id"]
+
+    await callback.message.edit_text(
+        "Введите дедлайн в формате ДД.ММ.ГГГГ или нажмите 'Пропустить':",
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="⏭ Пропустить", callback_data="skip_task_deadline")],
+            [InlineKeyboardButton(text="❌ Отмена", callback_data=f"cancel_add_task:{student_id}")]
+        ]),
+    )
+
+
+@router.message(MentorTaskCreationStates.waiting_for_description)
+async def handle_task_description_input(message: Message, state: FSMContext) -> None:
+    """Handle task description input."""
+    description = message.text.strip()
+
+    await state.update_data(description=description)
+    await state.set_state(MentorTaskCreationStates.waiting_for_deadline)
+
+    data = await state.get_data()
+    student_id = data["student_id"]
+
+    await message.answer(
+        "✅ Описание сохранено\n\n"
+        "Введите дедлайн в формате ДД.ММ.ГГГГ или нажмите 'Пропустить':",
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="⏭ Пропустить", callback_data="skip_task_deadline")],
+            [InlineKeyboardButton(text="❌ Отмена", callback_data=f"cancel_add_task:{student_id}")]
+        ]),
+    )
+
+
+@router.callback_query(MentorTaskCreationStates.waiting_for_deadline, F.data == "skip_task_deadline")
+async def handle_skip_task_deadline(callback: CallbackQuery, state: FSMContext) -> None:
+    """Handle skipping task deadline."""
+    await callback.answer()
+
+    await state.update_data(deadline=None)
+    await state.set_state(MentorTaskCreationStates.waiting_for_mentor_task)
+
+    data = await state.get_data()
+    student_id = data["student_id"]
+
+    await callback.message.edit_text(
+        "Введите заметку для себя (mentor_task) или нажмите 'Пропустить':",
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="⏭ Пропустить", callback_data="skip_mentor_task")],
+            [InlineKeyboardButton(text="❌ Отмена", callback_data=f"cancel_add_task:{student_id}")]
+        ]),
+    )
+
+
+@router.message(MentorTaskCreationStates.waiting_for_deadline)
+async def handle_task_deadline_input(message: Message, state: FSMContext) -> None:
+    """Handle task deadline input."""
+    deadline_str = message.text.strip()
+
+    # Parse deadline
+    try:
+        day, month, year = deadline_str.split(".")
+        deadline = date(int(year), int(month), int(day))
+    except (ValueError, AttributeError):
+        await message.answer(
+            "❌ Неверный формат даты. Используйте формат ДД.ММ.ГГГГ (например, 25.12.2026):"
+        )
+        return
+
+    await state.update_data(deadline=deadline)
+    await state.set_state(MentorTaskCreationStates.waiting_for_mentor_task)
+
+    data = await state.get_data()
+    student_id = data["student_id"]
+
+    await message.answer(
+        f"✅ Дедлайн: {deadline.strftime('%d.%m.%Y')}\n\n"
+        "Введите заметку для себя (mentor_task) или нажмите 'Пропустить':",
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="⏭ Пропустить", callback_data="skip_mentor_task")],
+            [InlineKeyboardButton(text="❌ Отмена", callback_data=f"cancel_add_task:{student_id}")]
+        ]),
+    )
+
+
+@router.callback_query(MentorTaskCreationStates.waiting_for_mentor_task, F.data == "skip_mentor_task")
+async def handle_skip_mentor_task(callback: CallbackQuery, state: FSMContext) -> None:
+    """Handle skipping mentor task."""
+    await callback.answer()
+
+    await state.update_data(mentor_task=None)
+    await show_task_confirmation(callback.message, state)
+
+
+@router.message(MentorTaskCreationStates.waiting_for_mentor_task)
+async def handle_mentor_task_input(message: Message, state: FSMContext) -> None:
+    """Handle mentor task input."""
+    mentor_task = message.text.strip()
+
+    await state.update_data(mentor_task=mentor_task)
+    await show_task_confirmation(message, state)
+
+
+async def show_task_confirmation(message: Message, state: FSMContext) -> None:
+    """Show task confirmation."""
+    data = await state.get_data()
+    student_id = data["student_id"]
+    title = data["title"]
+    description = data.get("description")
+    deadline = data.get("deadline")
+    mentor_task = data.get("mentor_task")
+
+    lines = ["📌 Подтверждение создания задачи\n"]
+    lines.append(f"📝 Название: {title}")
+    if description:
+        lines.append(f"📄 Описание: {description}")
+    if deadline:
+        lines.append(f"📅 Дедлайн: {deadline.strftime('%d.%m.%Y')}")
+    if mentor_task:
+        lines.append(f"📋 Заметка: {mentor_task}")
+
+    await state.set_state(MentorTaskCreationStates.confirming_task)
+
+    await message.answer(
+        "\n".join(lines) + "\n\nСоздать задачу?",
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+            [
+                InlineKeyboardButton(text="✅ Создать", callback_data="confirm_add_task"),
+                InlineKeyboardButton(text="❌ Отмена", callback_data=f"cancel_add_task:{student_id}")
+            ]
+        ]),
+    )
+
+
+@router.callback_query(MentorTaskCreationStates.confirming_task, F.data == "confirm_add_task")
+async def handle_confirm_add_task(callback: CallbackQuery, state: FSMContext) -> None:
+    """Handle task creation confirmation."""
+    await callback.answer()
+
+    data = await state.get_data()
+    student_id = data["student_id"]
+    title = data["title"]
+    description = data.get("description")
+    deadline = data.get("deadline")
+    mentor_task = data.get("mentor_task")
+
+    async with get_session() as session:
+        from sputnik_offer_crm.services.student_task import StudentTaskService, StudentNotFoundError
+
+        service = StudentTaskService(session)
+        try:
+            task = await service.create_task(
+                student_id=student_id,
+                title=title,
+                description=description,
+                deadline=deadline,
+                mentor_task=mentor_task,
+            )
+
+            await callback.message.edit_text(
+                f"✅ Задача создана\n\n"
+                f"📝 {task.title}\n"
+                f"🆔 ID: {task.id}"
+            )
+
+            logger.info(
+                "Mentor created task",
+                mentor_id=callback.from_user.id,
+                student_id=student_id,
+                task_id=task.id,
+            )
+
+        except StudentNotFoundError:
+            await callback.message.edit_text("❌ Ученик не найден.")
+        except Exception as e:
+            logger.error("Failed to create task", error=str(e), exc_info=True)
+            await callback.message.edit_text("❌ Не удалось создать задачу.")
+        finally:
+            await state.clear()
+
+    # Show card again
+    await show_student_card(callback.message, student_id)
+
+
+@router.callback_query(F.data.startswith("cancel_add_task:"))
+async def handle_cancel_add_task(callback: CallbackQuery, state: FSMContext) -> None:
+    """Handle cancellation of task creation."""
+    await callback.answer()
+
+    student_id = int(callback.data.split(":", 1)[1])
+
+    await callback.message.edit_text("❌ Создание задачи отменено.")
     await state.clear()
 
     # Show card again

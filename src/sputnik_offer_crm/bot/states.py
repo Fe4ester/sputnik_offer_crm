@@ -63,3 +63,13 @@ class StudentTimezoneChangeStates(StatesGroup):
     selecting_other_timezone = State()
     waiting_for_local_time = State()
     confirming_timezone = State()
+
+
+class MentorTaskCreationStates(StatesGroup):
+    """States for mentor task creation flow."""
+
+    waiting_for_title = State()
+    waiting_for_description = State()
+    waiting_for_deadline = State()
+    waiting_for_mentor_task = State()
+    confirming_task = State()
