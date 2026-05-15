@@ -476,6 +476,12 @@ async def show_student_card(message: Message, student_id: int) -> None:
                     callback_data=f"view_student_tasks:{student_id}"
                 )
             ],
+            [
+                InlineKeyboardButton(
+                    text="📝 Отчёты ученика",
+                    callback_data=f"view_student_reports:{student_id}"
+                )
+            ],
         ]
 
         # Add pause/resume button based on current state
@@ -2724,3 +2730,274 @@ async def handle_back_to_card(callback: CallbackQuery) -> None:
 
     student_id = int(callback.data.split(":", 1)[1])
     await show_student_card(callback.message, student_id)
+
+
+# Weekly reports handlers
+
+
+@router.callback_query(F.data.startswith("view_student_reports:"))
+async def handle_view_student_reports(callback: CallbackQuery) -> None:
+    """Handle viewing student weekly reports."""
+    await callback.answer()
+
+    student_id = int(callback.data.split(":", 1)[1])
+
+    async with get_session() as session:
+        # Check mentor access
+        mentor_service = MentorService(session)
+        try:
+            await mentor_service.check_mentor_access(callback.from_user.id)
+        except MentorNotFoundError:
+            await callback.message.edit_text("❌ Доступ запрещён. Вы не являетесь ментором.")
+            return
+
+        from sputnik_offer_crm.services.mentor_weekly_reports import (
+            MentorWeeklyReportsService,
+            StudentNotFoundError,
+        )
+
+        service = MentorWeeklyReportsService(session)
+        try:
+            reports = await service.get_student_reports(student_id, limit=10)
+
+            if not reports:
+                await callback.message.edit_text(
+                    "📝 У ученика пока нет отчётов.",
+                    reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+                        [InlineKeyboardButton(text="◀️ Назад", callback_data=f"back_to_card:{student_id}")]
+                    ]),
+                )
+                return
+
+            # Build reports list
+            lines = ["📝 Отчёты ученика\n"]
+            buttons = []
+
+            for i, report in enumerate(reports, 1):
+                week_str = report.week_start_date.strftime("%d.%m.%Y")
+                problem_indicator = " ⚠️" if report.has_problems_unsolved else ""
+                lines.append(f"{i}. Неделя с {week_str}{problem_indicator}")
+
+                buttons.append([
+                    InlineKeyboardButton(
+                        text=f"📄 Открыть #{i}",
+                        callback_data=f"open_report:{report.id}:{student_id}"
+                    )
+                ])
+
+            lines.append("")
+            if len(reports) == 10:
+                lines.append("(показаны последние 10 отчётов)")
+
+            # Add back button
+            buttons.append([
+                InlineKeyboardButton(text="◀️ Назад", callback_data=f"back_to_card:{student_id}")
+            ])
+
+            await callback.message.edit_text(
+                "\n".join(lines),
+                reply_markup=InlineKeyboardMarkup(inline_keyboard=buttons),
+            )
+
+            logger.info(
+                "Mentor viewed student reports list",
+                mentor_id=callback.from_user.id,
+                student_id=student_id,
+                reports_count=len(reports),
+            )
+
+        except StudentNotFoundError:
+            await callback.message.edit_text("❌ Ученик не найден.")
+        except Exception as e:
+            logger.error("Failed to get student reports", error=str(e), exc_info=True)
+            await callback.message.edit_text("❌ Не удалось загрузить отчёты.")
+
+
+@router.callback_query(F.data.startswith("open_report:"))
+async def handle_open_report(callback: CallbackQuery) -> None:
+    """Handle opening full report."""
+    await callback.answer()
+
+    parts = callback.data.split(":", 2)
+    report_id = int(parts[1])
+    student_id = int(parts[2])
+
+    async with get_session() as session:
+        # Check mentor access
+        mentor_service = MentorService(session)
+        try:
+            await mentor_service.check_mentor_access(callback.from_user.id)
+        except MentorNotFoundError:
+            await callback.message.edit_text("❌ Доступ запрещён. Вы не являетесь ментором.")
+            return
+
+        from sputnik_offer_crm.services.mentor_weekly_reports import (
+            MentorWeeklyReportsService,
+            ReportNotFoundError,
+        )
+
+        service = MentorWeeklyReportsService(session)
+        try:
+            report = await service.get_report_detail(report_id)
+
+            # Build report text
+            lines = ["📝 Еженедельный отчёт\n"]
+            lines.append(f"👤 Ученик: {report.student_name}")
+            lines.append(f"📅 Неделя с {report.week_start_date.strftime('%d.%m.%Y')}\n")
+
+            lines.append("❓ Что делали на прошлой неделе?")
+            lines.append(report.answer_what_did)
+            lines.append("")
+
+            if report.answer_problems_solved:
+                lines.append("✅ Какие проблемы решили?")
+                lines.append(report.answer_problems_solved)
+                lines.append("")
+
+            if report.answer_problems_unsolved:
+                lines.append("⚠️ Какие проблемы не решены?")
+                lines.append(report.answer_problems_unsolved)
+                lines.append("")
+
+            await callback.message.edit_text(
+                "\n".join(lines),
+                reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+                    [InlineKeyboardButton(text="◀️ К списку отчётов", callback_data=f"view_student_reports:{student_id}")]
+                ]),
+            )
+
+            logger.info(
+                "Mentor viewed report detail",
+                mentor_id=callback.from_user.id,
+                report_id=report_id,
+                student_id=student_id,
+            )
+
+        except ReportNotFoundError:
+            await callback.message.edit_text("❌ Отчёт не найден.")
+        except Exception as e:
+            logger.error("Failed to get report detail", error=str(e), exc_info=True)
+            await callback.message.edit_text("❌ Не удалось загрузить отчёт.")
+
+
+@router.message(F.text == "📝 Последние отчёты")
+async def handle_recent_reports(message: Message) -> None:
+    """Handle recent reports view request."""
+    async with get_session() as session:
+        # Check mentor access
+        mentor_service = MentorService(session)
+        try:
+            await mentor_service.check_mentor_access(message.from_user.id)
+        except MentorNotFoundError:
+            await message.answer("❌ Доступ запрещён. Вы не являетесь ментором.")
+            return
+
+        from sputnik_offer_crm.services.mentor_weekly_reports import MentorWeeklyReportsService
+
+        service = MentorWeeklyReportsService(session)
+        try:
+            reports = await service.get_recent_reports(limit=15)
+
+            if not reports:
+                await message.answer(
+                    "📝 Пока нет отчётов от учеников.",
+                    reply_markup=get_mentor_menu_keyboard(),
+                )
+                return
+
+            # Build reports list
+            lines = ["📝 Последние отчёты учеников\n"]
+            buttons = []
+
+            for i, report in enumerate(reports, 1):
+                week_str = report.week_start_date.strftime("%d.%m.%Y")
+                problem_indicator = " ⚠️" if report.has_problems_unsolved else ""
+                lines.append(f"{i}. {report.student_name} — {week_str}{problem_indicator}")
+
+                buttons.append([
+                    InlineKeyboardButton(
+                        text=f"📄 Открыть #{i}",
+                        callback_data=f"open_recent_report:{report.id}"
+                    )
+                ])
+
+            lines.append("")
+            if len(reports) == 15:
+                lines.append("(показаны последние 15 отчётов)")
+
+            await message.answer(
+                "\n".join(lines),
+                reply_markup=InlineKeyboardMarkup(inline_keyboard=buttons),
+            )
+
+            logger.info(
+                "Mentor viewed recent reports",
+                mentor_id=message.from_user.id,
+                reports_count=len(reports),
+            )
+
+        except Exception as e:
+            logger.error("Failed to get recent reports", error=str(e), exc_info=True)
+            await message.answer(
+                "❌ Не удалось загрузить отчёты.",
+                reply_markup=get_mentor_menu_keyboard(),
+            )
+
+
+@router.callback_query(F.data.startswith("open_recent_report:"))
+async def handle_open_recent_report(callback: CallbackQuery) -> None:
+    """Handle opening report from recent list."""
+    await callback.answer()
+
+    report_id = int(callback.data.split(":", 1)[1])
+
+    async with get_session() as session:
+        # Check mentor access
+        mentor_service = MentorService(session)
+        try:
+            await mentor_service.check_mentor_access(callback.from_user.id)
+        except MentorNotFoundError:
+            await callback.message.edit_text("❌ Доступ запрещён. Вы не являетесь ментором.")
+            return
+
+        from sputnik_offer_crm.services.mentor_weekly_reports import (
+            MentorWeeklyReportsService,
+            ReportNotFoundError,
+        )
+
+        service = MentorWeeklyReportsService(session)
+        try:
+            report = await service.get_report_detail(report_id)
+
+            # Build report text
+            lines = ["📝 Еженедельный отчёт\n"]
+            lines.append(f"👤 Ученик: {report.student_name}")
+            lines.append(f"📅 Неделя с {report.week_start_date.strftime('%d.%m.%Y')}\n")
+
+            lines.append("❓ Что делали на прошлой неделе?")
+            lines.append(report.answer_what_did)
+            lines.append("")
+
+            if report.answer_problems_solved:
+                lines.append("✅ Какие проблемы решили?")
+                lines.append(report.answer_problems_solved)
+                lines.append("")
+
+            if report.answer_problems_unsolved:
+                lines.append("⚠️ Какие проблемы не решены?")
+                lines.append(report.answer_problems_unsolved)
+                lines.append("")
+
+            await callback.message.edit_text("\n".join(lines))
+
+            logger.info(
+                "Mentor viewed recent report detail",
+                mentor_id=callback.from_user.id,
+                report_id=report_id,
+            )
+
+        except ReportNotFoundError:
+            await callback.message.edit_text("❌ Отчёт не найден.")
+        except Exception as e:
+            logger.error("Failed to get report detail", error=str(e), exc_info=True)
+            await callback.message.edit_text("❌ Не удалось загрузить отчёт.")
