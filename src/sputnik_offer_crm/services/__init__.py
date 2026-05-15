@@ -85,6 +85,7 @@ from sputnik_offer_crm.services.registration import (
 )
 from sputnik_offer_crm.services.student import (
     DeadlineInfo,
+    StageOverviewInfo,
     StudentProgressInfo,
     StudentService,
 )
@@ -113,6 +114,7 @@ __all__ = [
     "StudentService",
     "StudentProgressInfo",
     "DeadlineInfo",
+    "StageOverviewInfo",
     "StudentTimezoneService",
     "StudentTimezoneError",
     "TimezoneStudentNotFoundError",

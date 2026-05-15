@@ -11,6 +11,7 @@ def get_student_menu_keyboard() -> ReplyKeyboardMarkup:
         [KeyboardButton(text="📌 Мои задачи")],
         [KeyboardButton(text="📝 Отправить")],
         [KeyboardButton(text="🌍 Сменить часовой пояс")],
+        [KeyboardButton(text="❓ Помощь")],
     ]
     return ReplyKeyboardMarkup(
         keyboard=keyboard,

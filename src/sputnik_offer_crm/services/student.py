@@ -36,6 +36,15 @@ class DeadlineInfo(NamedTuple):
     task_id: int | None = None  # For task deadlines
 
 
+class StageOverviewInfo(NamedTuple):
+    """Stage overview information for student."""
+
+    stage: Stage
+    status: str  # "completed", "current", "upcoming"
+    deadline: date | None
+    is_overdue: bool
+
+
 class StudentService:
     """Service for student operations."""
 
@@ -154,3 +163,102 @@ class StudentService:
         deadlines.sort(key=lambda d: d.deadline_date)
 
         return deadlines
+
+    async def get_stages_overview(self, telegram_id: int) -> list[StageOverviewInfo]:
+        """
+        Get overview of all stages in student's direction with their statuses.
+
+        Returns:
+            List of StageOverviewInfo ordered by stage order
+        """
+        # Get student progress
+        progress_info = await self.get_student_progress(telegram_id)
+        if not progress_info:
+            return []
+
+        student = progress_info.student
+        direction = progress_info.direction
+        current_stage_id = progress_info.progress.current_stage_id
+
+        # Get all stages for this direction
+        result = await self.session.execute(
+            select(Stage)
+            .where(Stage.direction_id == direction.id)
+            .order_by(Stage.stage_number)
+        )
+        stages = result.scalars().all()
+
+        # Get all stage progress records for this student
+        result = await self.session.execute(
+            select(StudentStageProgress)
+            .where(StudentStageProgress.student_id == student.id)
+        )
+        stage_progress_map = {sp.stage_id: sp for sp in result.scalars().all()}
+
+        # Build overview
+        overview: list[StageOverviewInfo] = []
+        today = date.today()
+        found_current = False
+
+        for stage in stages:
+            stage_progress = stage_progress_map.get(stage.id)
+
+            # Determine status
+            if stage_progress and stage_progress.completed_at:
+                status = "completed"
+            elif stage.id == current_stage_id:
+                status = "current"
+                found_current = True
+            elif not found_current:
+                # Before current stage but not completed - shouldn't happen normally
+                status = "completed"
+            else:
+                status = "upcoming"
+
+            # Get deadline
+            deadline = stage_progress.planned_deadline if stage_progress else None
+            is_overdue = deadline < today if deadline else False
+
+            overview.append(
+                StageOverviewInfo(
+                    stage=stage,
+                    status=status,
+                    deadline=deadline,
+                    is_overdue=is_overdue,
+                )
+            )
+
+        return overview
+
+    async def get_completed_stages_count(self, telegram_id: int) -> tuple[int, int]:
+        """
+        Get count of completed stages and total stages.
+
+        Returns:
+            Tuple of (completed_count, total_count)
+        """
+        # Get student progress
+        progress_info = await self.get_student_progress(telegram_id)
+        if not progress_info:
+            return (0, 0)
+
+        student = progress_info.student
+        direction = progress_info.direction
+
+        # Get total stages count
+        result = await self.session.execute(
+            select(Stage).where(Stage.direction_id == direction.id)
+        )
+        total_count = len(result.scalars().all())
+
+        # Get completed stages count
+        result = await self.session.execute(
+            select(StudentStageProgress)
+            .where(
+                StudentStageProgress.student_id == student.id,
+                StudentStageProgress.completed_at.is_not(None),
+            )
+        )
+        completed_count = len(result.scalars().all())
+
+        return (completed_count, total_count)

@@ -50,28 +50,40 @@ async def show_my_progress(message: Message) -> None:
             )
             return
 
+        # Get completed stages count
+        completed_count, total_count = await service.get_completed_stages_count(message.from_user.id)
+
         # Format started_at date
         started_date = progress_info.progress.started_at.strftime("%d.%m.%Y")
 
-        await message.answer(
-            f"📊 Ваш прогресс\n\n"
-            f"📚 Направление: {progress_info.direction.name}\n"
-            f"📍 Текущий этап: {progress_info.current_stage.title}\n"
-            f"📅 Дата старта: {started_date}\n"
-            f"🌍 Часовой пояс: {progress_info.student.timezone}\n\n"
-            f"Продолжайте в том же духе! 💪"
-        )
+        lines = ["📊 Ваш прогресс\n"]
+        lines.append(f"📚 Направление: {progress_info.direction.name}")
+        lines.append(f"📍 Текущий этап: {progress_info.current_stage.title}")
+        lines.append(f"📅 Дата старта: {started_date}")
+        lines.append(f"🌍 Часовой пояс: {progress_info.student.timezone}")
+        lines.append(f"✅ Пройдено этапов: {completed_count} из {total_count}")
+        lines.append("")
+        lines.append("Продолжайте в том же духе! 💪")
+
+        await message.answer("\n".join(lines))
 
 
 @router.message(F.text == "📅 Мои дедлайны")
 async def show_my_deadlines(message: Message) -> None:
-    """Show student deadlines."""
+    """Show student deadlines and stages overview."""
     async with get_session() as session:
         service = StudentService(session)
 
         # Check if student is active
         progress_info = await service.get_student_progress(message.from_user.id)
-        if progress_info and not progress_info.student.is_active:
+        if not progress_info:
+            await message.answer(
+                "📅 Дедлайны не найдены\n\n"
+                "Вы ещё не зарегистрированы или не начали обучение."
+            )
+            return
+
+        if not progress_info.student.is_active:
             await message.answer(
                 "ℹ️ Ваш доступ к боту приостановлен.\n\n"
                 "Обратитесь к ментору для получения информации."
@@ -79,7 +91,7 @@ async def show_my_deadlines(message: Message) -> None:
             return
 
         # Check if student is paused
-        if progress_info and progress_info.student.is_paused:
+        if progress_info.student.is_paused:
             await message.answer(
                 "⏸ Вы на паузе\n\n"
                 "Ваше обучение временно приостановлено.\n"
@@ -87,28 +99,66 @@ async def show_my_deadlines(message: Message) -> None:
             )
             return
 
-        deadlines = await service.get_student_deadlines(message.from_user.id)
+        # Get stages overview
+        stages_overview = await service.get_stages_overview(message.from_user.id)
 
-        if not deadlines:
+        if not stages_overview:
             await message.answer(
                 "📅 Дедлайны\n\n"
-                "У вас пока нет назначенных дедлайнов.\n"
-                "Ментор установит их позже."
+                "Информация о этапах не найдена."
             )
             return
 
-        # Format deadlines
-        lines = ["📅 Ваши дедлайны\n"]
-        for deadline in deadlines:
-            status_emoji = "⚠️" if deadline.is_overdue else "📌"
-            date_str = deadline.deadline_date.strftime("%d.%m.%Y")
-            lines.append(f"{status_emoji} {deadline.title}")
-            lines.append(f"   Срок: {date_str}")
-            if deadline.is_overdue:
-                lines.append("   (просрочен)")
+        # Format stages overview
+        lines = ["📅 Этапы и дедлайны\n"]
+        lines.append(f"📚 Направление: {progress_info.direction.name}\n")
+
+        for stage_info in stages_overview:
+            # Status emoji
+            if stage_info.status == "completed":
+                status_emoji = "✅"
+                status_text = "Пройден"
+            elif stage_info.status == "current":
+                status_emoji = "📍"
+                status_text = "Текущий"
+            else:  # upcoming
+                status_emoji = "⏳"
+                status_text = "Предстоящий"
+
+            lines.append(f"{status_emoji} {stage_info.stage.title}")
+            lines.append(f"   Статус: {status_text}")
+
+            # Show deadline if exists
+            if stage_info.deadline:
+                date_str = stage_info.deadline.strftime("%d.%m.%Y")
+                if stage_info.is_overdue and stage_info.status != "completed":
+                    lines.append(f"   ⚠️ Дедлайн: {date_str} (просрочен)")
+                else:
+                    lines.append(f"   📅 Дедлайн: {date_str}")
+
             lines.append("")
 
         await message.answer("\n".join(lines))
+
+
+@router.message(F.text == "❓ Помощь")
+async def show_help(message: Message) -> None:
+    """Show help information."""
+    help_text = (
+        "❓ Помощь\n\n"
+        "📊 Мой прогресс\n"
+        "Показывает ваше текущее направление, этап обучения, дату старта и количество пройденных этапов.\n\n"
+        "📅 Мои дедлайны\n"
+        "Отображает все этапы вашего направления с их статусами (пройден, текущий, предстоящий) и дедлайнами.\n\n"
+        "📌 Мои задачи\n"
+        "Список задач, назначенных вам ментором. Вы можете отмечать задачи как выполненные.\n\n"
+        "📝 Отправить\n"
+        "Отправка еженедельного отчёта о вашей работе. Отчёт можно отправлять раз в неделю.\n\n"
+        "🌍 Сменить часовой пояс\n"
+        "Изменение вашего часового пояса для корректного отображения дат и времени.\n\n"
+        "❗️ Если что-то не работает или нужна помощь — обратитесь к вашему ментору."
+    )
+    await message.answer(help_text)
 
 
 @router.message(F.text == "📝 Отправить")
