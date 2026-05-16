@@ -1,0 +1,39 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: sputnik_postgres
+    environment:
+      POSTGRES_DB: sputnik_offer_crm
+      POSTGRES_USER: sputnik
+      POSTGRES_PASSWORD: sputnik
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U sputnik -d sputnik_offer_crm"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+      start_period: 5s
+
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: sputnik_app
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      BOT_TOKEN: ${BOT_TOKEN:-dummy_token}
+      LOG_LEVEL: ${LOG_LEVEL:-INFO}
+      OFFER_BROADCAST_CHAT_ID: ${OFFER_BROADCAST_CHAT_ID:-0}
+      DATABASE_URL: postgresql+asyncpg://sputnik:sputnik@postgres:5432/sputnik_offer_crm
+    volumes:
+      - ./:/app
+    command: ["bot"]
+    restart: unless-stopped
+
+volumes:
+  postgres_data:
