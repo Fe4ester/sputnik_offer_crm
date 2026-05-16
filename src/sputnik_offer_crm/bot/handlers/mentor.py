@@ -20,6 +20,7 @@ from sputnik_offer_crm.services import (
     DeadlineManagementError,
     DeadlineStudentHasNoProgressError,
     DeadlineStudentNotFoundError,
+    EventNotificationService,
     InviteCodeGenerationError,
     InvalidDeadlineDateError,
     ManualStageSelectionError,
@@ -624,6 +625,11 @@ async def handle_confirm_move_to_next_stage(callback: CallbackQuery, state: FSMC
         # Perform the move
         progress_service = MentorProgressService(session)
         try:
+            # Get stage info before move
+            info = await progress_service.get_next_stage_info(student_id)
+            old_stage = info.current_stage
+            student = info.student
+
             next_stage = await progress_service.move_to_next_stage(student_id)
 
             await callback.message.edit_text(
@@ -636,6 +642,14 @@ async def handle_confirm_move_to_next_stage(callback: CallbackQuery, state: FSMC
                 mentor_id=callback.from_user.id,
                 student_id=student_id,
                 new_stage_id=next_stage.id,
+            )
+
+            # Send notification to student
+            notification_service = EventNotificationService()
+            await notification_service.notify_stage_transition(
+                student=student,
+                old_stage=old_stage,
+                new_stage=next_stage,
             )
 
             # Show updated card
@@ -913,6 +927,23 @@ async def handle_confirm_manual_stage(callback: CallbackQuery, state: FSMContext
         # Perform the move
         progress_service = MentorProgressService(session)
         try:
+            # Get current stage info before move
+            from sputnik_offer_crm.models import Student, StudentProgress, Stage
+            from sqlalchemy import select
+
+            result = await session.execute(
+                select(Student, StudentProgress, Stage)
+                .join(StudentProgress, StudentProgress.student_id == Student.id)
+                .join(Stage, Stage.id == StudentProgress.current_stage_id)
+                .where(Student.id == student_id)
+            )
+            row = result.one_or_none()
+            if row:
+                student, _, old_stage = row
+            else:
+                student = None
+                old_stage = None
+
             target_stage = await progress_service.move_to_stage(student_id, stage_id)
 
             await callback.message.edit_text(
@@ -926,6 +957,15 @@ async def handle_confirm_manual_stage(callback: CallbackQuery, state: FSMContext
                 student_id=student_id,
                 new_stage_id=target_stage.id,
             )
+
+            # Send notification to student
+            if student and old_stage:
+                notification_service = EventNotificationService()
+                await notification_service.notify_stage_transition(
+                    student=student,
+                    old_stage=old_stage,
+                    new_stage=target_stage,
+                )
 
             # Show updated card
             await show_student_card(callback.message, student_id)
@@ -1310,6 +1350,15 @@ async def handle_confirm_deadline(callback: CallbackQuery, state: FSMContext) ->
         # Set deadline
         deadline_service = MentorDeadlineService(session)
         try:
+            # Get student info
+            from sputnik_offer_crm.models import Student
+            from sqlalchemy import select
+
+            result = await session.execute(
+                select(Student).where(Student.id == student_id)
+            )
+            student = result.scalar_one_or_none()
+
             current_stage = await deadline_service.set_current_stage_deadline(
                 student_id, new_deadline
             )
@@ -1328,6 +1377,15 @@ async def handle_confirm_deadline(callback: CallbackQuery, state: FSMContext) ->
                 stage_id=current_stage.id,
                 new_deadline=deadline_iso,
             )
+
+            # Send notification to student
+            if student:
+                notification_service = EventNotificationService()
+                await notification_service.notify_deadline_changed(
+                    student=student,
+                    stage=current_stage,
+                    new_deadline=new_deadline,
+                )
 
             # Show updated card
             await show_student_card(callback.message, student_id)
@@ -1489,6 +1547,22 @@ async def handle_confirm_bulk_deadlines(callback: CallbackQuery, state: FSMConte
         # Set bulk deadlines
         deadline_service = MentorDeadlineService(session)
         try:
+            # Get student and stage info
+            from sputnik_offer_crm.models import Student, Stage
+            from sqlalchemy import select
+
+            result = await session.execute(
+                select(Student).where(Student.id == student_id)
+            )
+            student = result.scalar_one_or_none()
+
+            # Get stage titles for notification
+            stage_ids = [stage_id for stage_id, _ in stage_deadlines]
+            result = await session.execute(
+                select(Stage).where(Stage.id.in_(stage_ids))
+            )
+            stages_dict = {stage.id: stage for stage in result.scalars().all()}
+
             count = await deadline_service.set_all_stage_deadlines(
                 student_id, stage_deadlines
             )
@@ -1503,6 +1577,19 @@ async def handle_confirm_bulk_deadlines(callback: CallbackQuery, state: FSMConte
                 mentor_id=callback.from_user.id,
                 student_id=student_id,
                 count=count,
+            )
+
+            # Send notification to student
+            if student:
+                stage_deadline_list = [
+                    (stages_dict[stage_id].title, deadline)
+                    for stage_id, deadline in stage_deadlines
+                    if stage_id in stages_dict
+                ]
+                notification_service = EventNotificationService()
+            await notification_service.notify_bulk_deadlines_set(
+                student=student,
+                stage_deadlines=stage_deadline_list,
             )
 
             # Show updated card
@@ -1657,6 +1744,10 @@ async def handle_confirm_dropout(callback: CallbackQuery, state: FSMContext) -> 
                 mentor_id=callback.from_user.id,
                 student_id=student_id,
             )
+
+            # Send notification to student
+            notification_service = EventNotificationService()
+            await notification_service.notify_student_dropped(student=student)
 
             # Show updated card
             await show_student_card(callback.message, student_id)
@@ -1936,6 +2027,14 @@ async def handle_confirm_offer_completion(callback: CallbackQuery, state: FSMCon
                 position=position,
             )
 
+            # Send notification to student
+            notification_service = EventNotificationService()
+            await notification_service.notify_offer_received(
+                student=student,
+                company=company,
+                position=position,
+            )
+
             # Show updated card
             await show_student_card(callback.message, student_id)
 
@@ -2102,6 +2201,10 @@ async def handle_confirm_pause(callback: CallbackQuery, state: FSMContext) -> No
                 student_id=student_id,
             )
 
+            # Send notification to student
+            notification_service = EventNotificationService()
+            await notification_service.notify_student_paused(student=student)
+
             # Show updated card
             await show_student_card(callback.message, student_id)
 
@@ -2263,6 +2366,10 @@ async def handle_confirm_resume(callback: CallbackQuery, state: FSMContext) -> N
                 mentor_id=callback.from_user.id,
                 student_id=student_id,
             )
+
+            # Send notification to student
+            notification_service = EventNotificationService()
+            await notification_service.notify_student_resumed(student=student)
 
             # Show updated card
             await show_student_card(callback.message, student_id)

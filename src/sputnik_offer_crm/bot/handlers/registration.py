@@ -14,6 +14,7 @@ from sputnik_offer_crm.bot.states import RegistrationStates
 from sputnik_offer_crm.db import get_session
 from sputnik_offer_crm.services import (
     DirectionHasNoStagesError,
+    EventNotificationService,
     InviteCodeAlreadyUsedError,
     InviteCodeNotFoundError,
     RegistrationService,
@@ -251,6 +252,14 @@ async def complete_registration(
                 student_id=registration_result.student.id,
                 telegram_id=callback.from_user.id,
                 direction_id=registration_result.direction.id,
+            )
+
+            # Send welcome notification
+            notification_service = EventNotificationService()
+            await notification_service.notify_registration_complete(
+                student=registration_result.student,
+                direction_name=registration_result.direction.name,
+                first_stage_title=registration_result.first_stage.title,
             )
 
         except InviteCodeNotFoundError:

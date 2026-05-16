@@ -98,6 +98,7 @@ from sputnik_offer_crm.services.student_timezone import (
     StudentNotFoundError as TimezoneStudentNotFoundError,
 )
 from sputnik_offer_crm.services.weekly_report import WeeklyReportService
+from sputnik_offer_crm.services.event_notification import EventNotificationService
 
 __all__ = [
     "RegistrationService",
@@ -172,4 +173,5 @@ __all__ = [
     "DirectionStageNotFoundError",
     "DirectionStageInUseError",
     "InvalidDurationError",
+    "EventNotificationService",
 ]
