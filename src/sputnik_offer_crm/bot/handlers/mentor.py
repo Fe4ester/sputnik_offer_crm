@@ -1591,10 +1591,10 @@ async def handle_confirm_bulk_deadlines(callback: CallbackQuery, state: FSMConte
                     if stage_id in stages_dict
                 ]
                 notification_service = EventNotificationService()
-            await notification_service.notify_bulk_deadlines_set(
-                student=student,
-                stage_deadlines=stage_deadline_list,
-            )
+                await notification_service.notify_bulk_deadlines_set(
+                    student=student,
+                    stage_deadlines=stage_deadline_list,
+                )
 
             # Show updated card
             await show_student_card(callback.message, student_id)
