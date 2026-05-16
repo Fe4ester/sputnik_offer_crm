@@ -3,6 +3,7 @@
 from datetime import date
 
 from aiogram import F, Router
+from aiogram.filters import Command
 from aiogram.fsm.context import FSMContext
 from aiogram.types import CallbackQuery, Message, InlineKeyboardButton, InlineKeyboardMarkup
 
@@ -64,6 +65,83 @@ async def show_mentor_menu(message: Message) -> None:
         "Выберите действие:",
         reply_markup=get_mentor_menu_keyboard(),
     )
+
+
+@router.message(Command("make_mentor"))
+async def make_mentor(message: Message) -> None:
+    """Promote existing known user to mentor by telegram_id."""
+    if not message.text:
+        await message.answer("❌ Использование: /make_mentor <telegram_id>")
+        return
+
+    parts = message.text.strip().split(maxsplit=1)
+    if len(parts) != 2:
+        await message.answer("❌ Использование: /make_mentor <telegram_id>")
+        return
+
+    try:
+        target_telegram_id = int(parts[1].strip())
+        if target_telegram_id <= 0:
+            raise ValueError
+    except ValueError:
+        await message.answer("❌ Некорректный telegram_id.")
+        return
+
+    async with get_session() as session:
+        mentor_service = MentorService(session)
+        try:
+            actor = await mentor_service.check_mentor_access(message.from_user.id)
+        except MentorNotFoundError:
+            await message.answer("❌ Доступ запрещён. Команда доступна только менторам.")
+            return
+
+        from sqlalchemy import select
+        from sputnik_offer_crm.models import Mentor, Student
+
+        student_result = await session.execute(
+            select(Student).where(Student.telegram_id == target_telegram_id)
+        )
+        student = student_result.scalar_one_or_none()
+        if not student:
+            await message.answer("❌ Пользователь с таким telegram_id не найден в системе.")
+            return
+
+        mentor_result = await session.execute(
+            select(Mentor).where(Mentor.telegram_id == target_telegram_id)
+        )
+        mentor = mentor_result.scalar_one_or_none()
+
+        if mentor:
+            if not mentor.is_active:
+                mentor.is_active = True
+                await session.commit()
+                action = "reactivated"
+            else:
+                action = "already_active"
+        else:
+            mentor = Mentor(
+                telegram_id=student.telegram_id,
+                first_name=student.first_name,
+                last_name=student.last_name,
+                username=student.username,
+                is_active=True,
+            )
+            session.add(mentor)
+            await session.commit()
+            action = "created"
+
+        logger.info(
+            "Mentor promotion executed",
+            actor_mentor_id=actor.id,
+            actor_telegram_id=actor.telegram_id,
+            target_telegram_id=target_telegram_id,
+            target_student_id=student.id,
+            action=action,
+        )
+
+        await message.answer(
+            f"✅ Права ментора выданы пользователю {target_telegram_id}."
+        )
 
 
 @router.message(F.text == "➕ Новый код доступа")
