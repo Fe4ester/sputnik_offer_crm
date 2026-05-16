@@ -482,6 +482,12 @@ async def show_student_card(message: Message, student_id: int) -> None:
                     callback_data=f"view_student_reports:{student_id}"
                 )
             ],
+            [
+                InlineKeyboardButton(
+                    text="📊 Прогресс детальный",
+                    callback_data=f"detailed_progress:{student_id}"
+                )
+            ],
         ]
 
         # Add pause/resume button based on current state
@@ -3001,3 +3007,134 @@ async def handle_open_recent_report(callback: CallbackQuery) -> None:
         except Exception as e:
             logger.error("Failed to get report detail", error=str(e), exc_info=True)
             await callback.message.edit_text("❌ Не удалось загрузить отчёт.")
+
+
+@router.callback_query(F.data.startswith("detailed_progress:"))
+async def handle_detailed_progress(callback: CallbackQuery) -> None:
+    """Handle detailed progress view."""
+    await callback.answer()
+
+    student_id = int(callback.data.split(":", 1)[1])
+
+    async with get_session() as session:
+        # Check mentor access
+        mentor_service = MentorService(session)
+        try:
+            await mentor_service.check_mentor_access(callback.from_user.id)
+        except MentorNotFoundError:
+            await callback.message.edit_text("❌ Доступ запрещён. Вы не являетесь ментором.")
+            return
+
+        service = MentorStudentService(session)
+        detailed = await service.get_detailed_progress(student_id)
+
+        if not detailed:
+            await callback.message.edit_text(
+                "❌ Информация об ученике не найдена.",
+                reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+                    [InlineKeyboardButton(text="◀️ Назад", callback_data=f"back_to_card:{student_id}")]
+                ]),
+            )
+            return
+
+        # Build detailed progress text
+        lines = ["📊 Прогресс детальный\n"]
+
+        # Basic info
+        lines.append("👤 Информация об ученике")
+        lines.append(f"📛 Имя: {detailed.student.first_name}")
+        if detailed.student.last_name:
+            lines.append(f"   Фамилия: {detailed.student.last_name}")
+        if detailed.student.username:
+            lines.append(f"💬 Username: @{detailed.student.username}")
+        lines.append(f"🌍 Часовой пояс: {detailed.student.timezone}")
+        lines.append("")
+
+        # Status
+        if not detailed.student.is_active:
+            status_text = "⏸ Неактивен (отчислен)"
+        elif detailed.student.is_paused:
+            status_text = "⏸ На паузе"
+        elif detailed.student.offer_received_at:
+            status_text = "🎉 Завершён с оффером"
+        else:
+            status_text = "✅ Активен"
+        lines.append(f"Статус: {status_text}")
+        lines.append("")
+
+        # Offer info if completed
+        if detailed.student.offer_received_at:
+            lines.append("🎉 Информация об оффере:")
+            lines.append(f"🏢 Компания: {detailed.student.offer_company}")
+            lines.append(f"💼 Позиция: {detailed.student.offer_position}")
+            offer_date = detailed.student.offer_received_at.strftime("%d.%m.%Y")
+            lines.append(f"📅 Дата получения: {offer_date}")
+            lines.append("")
+
+        # Direction and progress
+        lines.append("📚 Обучение")
+        lines.append(f"Направление: {detailed.direction.name}")
+        lines.append(f"📍 Текущий этап: {detailed.current_stage.title}")
+        started_date = detailed.progress.started_at.strftime("%d.%m.%Y")
+        lines.append(f"📅 Дата старта: {started_date}")
+        lines.append(f"✅ Пройдено: {detailed.completed_stages_count} из {detailed.total_stages_count} этапов")
+        lines.append("")
+
+        # Stages overview
+        lines.append("📋 Этапы направления:")
+        for stage, status, deadline in detailed.all_stages:
+            if status == "completed":
+                status_emoji = "✅"
+                status_text = "Пройден"
+            elif status == "current":
+                status_emoji = "📍"
+                status_text = "Текущий"
+            else:
+                status_emoji = "⏳"
+                status_text = "Предстоящий"
+
+            lines.append(f"{status_emoji} {stage.title} ({status_text})")
+            if deadline:
+                date_str = deadline.strftime("%d.%m.%Y")
+                lines.append(f"   📅 Дедлайн: {date_str}")
+
+        lines.append("")
+
+        # Tasks summary
+        total_tasks = sum(detailed.tasks_summary.values())
+        if total_tasks > 0:
+            lines.append("📌 Задачи:")
+            if detailed.tasks_summary["open"] > 0:
+                lines.append(f"   📌 Открыто: {detailed.tasks_summary['open']}")
+            if detailed.tasks_summary["done"] > 0:
+                lines.append(f"   ✅ Выполнено: {detailed.tasks_summary['done']}")
+            if detailed.tasks_summary["cancelled"] > 0:
+                lines.append(f"   ❌ Отменено: {detailed.tasks_summary['cancelled']}")
+            if detailed.tasks_summary["overdue"] > 0:
+                lines.append(f"   ⚠️ Просрочено: {detailed.tasks_summary['overdue']}")
+        else:
+            lines.append("📌 Задачи: нет")
+
+        lines.append("")
+
+        # Reports summary
+        if detailed.recent_reports_count > 0:
+            lines.append(f"📝 Отчёты: {detailed.recent_reports_count} шт.")
+        else:
+            lines.append("📝 Отчёты: пока не отправлялись")
+
+        # Back button
+        buttons = [
+            [InlineKeyboardButton(text="◀️ К карточке ученика", callback_data=f"back_to_card:{student_id}")]
+        ]
+
+        await callback.message.edit_text(
+            "\n".join(lines),
+            reply_markup=InlineKeyboardMarkup(inline_keyboard=buttons),
+        )
+
+        logger.info(
+            "Mentor viewed detailed progress",
+            mentor_id=callback.from_user.id,
+            student_id=student_id,
+        )

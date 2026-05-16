@@ -38,6 +38,7 @@ from sputnik_offer_crm.services.mentor_student import (
     MentorStudentService,
     StudentCardInfo,
     StudentSearchResult,
+    DetailedProgressInfo,
 )
 from sputnik_offer_crm.services.mentor_student_status import (
     MentorStudentStatusService,
@@ -123,6 +124,7 @@ __all__ = [
     "MentorStudentService",
     "StudentSearchResult",
     "StudentCardInfo",
+    "DetailedProgressInfo",
     "MentorProgressService",
     "NextStageInfo",
     "MoveToNextStageError",
