@@ -2038,6 +2038,16 @@ async def handle_confirm_offer_completion(callback: CallbackQuery, state: FSMCon
                 company=company,
                 position=position,
             )
+            card = await MentorStudentService(session).get_student_card(student_id)
+            direction_name = card.direction.name if card else "Неизвестно"
+            await notification_service.notify_offer_broadcast(
+                student_name=student_name,
+                direction_name=direction_name,
+                company=company,
+                position=position,
+                offer_date=offer_date,
+                student_id=student_id,
+            )
 
             # Show updated card
             await show_student_card(callback.message, student_id)

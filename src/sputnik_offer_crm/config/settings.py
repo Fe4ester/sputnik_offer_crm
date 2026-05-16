@@ -18,6 +18,7 @@ class Settings(BaseSettings):
 
     # Telegram Bot
     bot_token: str = Field(..., alias="BOT_TOKEN")
+    offer_broadcast_chat_id: int | None = Field(default=None, alias="OFFER_BROADCAST_CHAT_ID")
 
     # Database
     database_url: str = Field(..., alias="DATABASE_URL")

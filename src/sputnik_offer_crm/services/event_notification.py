@@ -292,3 +292,55 @@ class EventNotificationService:
             message=message,
             student_id=student.id,
         )
+
+    async def notify_offer_broadcast(
+        self,
+        *,
+        student_name: str,
+        direction_name: str,
+        company: str,
+        position: str,
+        offer_date: str,
+        student_id: int | None = None,
+    ) -> bool:
+        """Send offer completion broadcast to configured chat."""
+        chat_id = self.settings.offer_broadcast_chat_id
+        if not chat_id:
+            logger.info(
+                "Offer broadcast skipped: chat is not configured",
+                student_id=student_id,
+            )
+            return False
+
+        message = (
+            "🎉 Новый оффер!\n\n"
+            f"👤 Ученик: {student_name}\n"
+            f"📚 Направление: {direction_name}\n"
+            f"🏢 Компания: {company}\n"
+            f"💼 Позиция: {position}\n"
+            f"📅 Дата: {offer_date}"
+        )
+
+        try:
+            bot = Bot(
+                token=self.settings.bot_token,
+                default=DefaultBotProperties(parse_mode=ParseMode.HTML),
+            )
+            try:
+                await bot.send_message(chat_id=chat_id, text=message)
+                logger.info(
+                    "Offer broadcast sent",
+                    student_id=student_id,
+                    chat_id=chat_id,
+                )
+                return True
+            finally:
+                await bot.session.close()
+        except Exception as e:
+            logger.error(
+                "Failed to send offer broadcast",
+                student_id=student_id,
+                chat_id=chat_id,
+                error=str(e),
+            )
+            return False
