@@ -74,6 +74,7 @@ from sputnik_offer_crm.services.direction_management import (
     DirectionInUseError,
     DirectionStageNotFoundError,
     DirectionStageInUseError,
+    InvalidDurationError,
 )
 from sputnik_offer_crm.services.registration import (
     DirectionHasNoStagesError,
@@ -166,4 +167,5 @@ __all__ = [
     "DirectionInUseError",
     "DirectionStageNotFoundError",
     "DirectionStageInUseError",
+    "InvalidDurationError",
 ]

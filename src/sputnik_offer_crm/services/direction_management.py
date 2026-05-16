@@ -31,6 +31,10 @@ class DirectionStageInUseError(DirectionManagementError):
     """Stage is in use and cannot be deactivated."""
 
 
+class InvalidDurationError(DirectionManagementError):
+    """Invalid planned duration value."""
+
+
 class DirectionManagementService:
     """Service for direction and stage management."""
 
@@ -265,3 +269,96 @@ class DirectionManagementService:
             )
         )
         return result.scalar() or 0
+
+    async def update_direction(
+        self,
+        direction_id: int,
+        name: str | None = None,
+    ) -> Direction:
+        """
+        Update direction fields.
+
+        Args:
+            direction_id: direction ID
+            name: new name (if provided)
+
+        Returns:
+            Updated direction
+
+        Raises:
+            DirectionNotFoundError: if direction not found
+
+        Note:
+            Code is intentionally not editable to avoid breaking dependencies.
+        """
+        result = await self.session.execute(
+            select(Direction).where(Direction.id == direction_id)
+        )
+        direction = result.scalar_one_or_none()
+
+        if not direction:
+            raise DirectionNotFoundError(f"Направление с ID {direction_id} не найдено")
+
+        if name is not None:
+            direction.name = name.strip()
+
+        await self.session.flush()
+        await self.session.refresh(direction)
+        return direction
+
+    async def update_stage(
+        self,
+        stage_id: int,
+        title: str | None = None,
+        description: str | None = None,
+        planned_duration_days: int | None = None,
+        clear_description: bool = False,
+        clear_duration: bool = False,
+    ) -> Stage:
+        """
+        Update stage fields.
+
+        Args:
+            stage_id: stage ID
+            title: new title (if provided)
+            description: new description (if provided)
+            planned_duration_days: new duration (if provided)
+            clear_description: if True, clear description field
+            clear_duration: if True, clear planned_duration_days field
+
+        Returns:
+            Updated stage
+
+        Raises:
+            DirectionStageNotFoundError: if stage not found
+            InvalidDurationError: if duration is invalid
+
+        Note:
+            stage_number is intentionally not editable to avoid breaking stage order.
+        """
+        result = await self.session.execute(select(Stage).where(Stage.id == stage_id))
+        stage = result.scalar_one_or_none()
+
+        if not stage:
+            raise DirectionStageNotFoundError(f"Этап с ID {stage_id} не найден")
+
+        if title is not None:
+            stage.title = title.strip()
+
+        if clear_description:
+            stage.description = None
+        elif description is not None:
+            stage.description = description.strip() if description.strip() else None
+
+        if clear_duration:
+            stage.planned_duration_days = None
+        elif planned_duration_days is not None:
+            if planned_duration_days <= 0:
+                raise InvalidDurationError(
+                    "Длительность должна быть положительным числом"
+                )
+            stage.planned_duration_days = planned_duration_days
+
+        await self.session.flush()
+        await self.session.refresh(stage)
+        return stage
