@@ -31,8 +31,8 @@ def upgrade() -> None:
     op.execute("""
         UPDATE students
         SET status = CASE
-            WHEN is_active = 0 THEN 'dropped'
-            WHEN is_active = 1 AND is_paused = 1 THEN 'paused'
+            WHEN is_active = FALSE THEN 'dropped'
+            WHEN is_active = TRUE AND is_paused = TRUE THEN 'paused'
             ELSE 'active'
         END
     """)
