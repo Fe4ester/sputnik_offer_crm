@@ -19,6 +19,19 @@ class EventNotificationService:
     def __init__(self):
         self.settings = get_settings()
 
+    @staticmethod
+    def _get_direction_guide(direction_name: str) -> str:
+        direction = direction_name.strip().lower()
+        if "backend" in direction:
+            return "Фокус: практикуйтесь в задачах по API, БД и архитектуре."
+        if "frontend" in direction:
+            return "Фокус: практикуйтесь в UI, вёрстке и работе с состоянием."
+        if "qa" in direction or "test" in direction:
+            return "Фокус: практикуйтесь в тест-дизайне, чек-листах и репортах."
+        if "data" in direction or "analyst" in direction:
+            return "Фокус: практикуйтесь в SQL, метриках и аналитических выводах."
+        return "Фокус: следуйте этапам направления и рекомендациям ментора."
+
     async def _send_message(
         self,
         telegram_id: int,
@@ -83,11 +96,18 @@ class EventNotificationService:
         Returns:
             True if sent successfully, False otherwise
         """
+        direction_guide = self._get_direction_guide(direction_name)
         message = (
-            f"🎉 Добро пожаловать в Sputnik Offer CRM!\n\n"
+            "🎉 Добро пожаловать в Sputnik Offer CRM!\n\n"
             f"📚 Направление: {direction_name}\n"
             f"📍 Текущий этап: {first_stage_title}\n\n"
-            f"Используйте меню для отправки отчётов и отслеживания прогресса."
+            "Что смотреть в меню:\n"
+            "• 📝 Отправить — еженедельный отчёт\n"
+            "• 📊 Мой прогресс — текущий этап и движение\n"
+            "• 📅 Мои дедлайны — сроки по этапам\n"
+            "• 📌 Мои задачи — задачи от ментора\n\n"
+            f"{direction_guide}\n\n"
+            "Если нужна помощь — обратитесь к ментору."
         )
 
         return await self._send_message(
