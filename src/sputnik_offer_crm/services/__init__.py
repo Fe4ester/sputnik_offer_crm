@@ -1,6 +1,7 @@
 """Business logic services."""
 
 from sputnik_offer_crm.services.mentor import (
+    MentorAdminRequiredError,
     InviteCodeGenerationError,
     MentorNotFoundError,
     MentorService,
@@ -109,6 +110,7 @@ __all__ = [
     "DirectionHasNoStagesError",
     "MentorService",
     "MentorNotFoundError",
+    "MentorAdminRequiredError",
     "NoActiveDirectionsError",
     "InviteCodeGenerationError",
     "MentorAnalyticsService",

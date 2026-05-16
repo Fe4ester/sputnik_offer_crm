@@ -26,6 +26,7 @@ from sputnik_offer_crm.services import (
     InvalidDeadlineDateError,
     ManualStageSelectionError,
     MentorDeadlineService,
+    MentorAdminRequiredError,
     MentorNotFoundError,
     MentorOfferCompletionService,
     MentorPauseResumeService,
@@ -90,8 +91,8 @@ async def make_mentor(message: Message) -> None:
     async with get_session() as session:
         mentor_service = MentorService(session)
         try:
-            actor = await mentor_service.check_mentor_access(message.from_user.id)
-        except MentorNotFoundError:
+            actor = await mentor_service.check_mentor_admin_access(message.from_user.id)
+        except (MentorNotFoundError, MentorAdminRequiredError):
             await message.answer("❌ Доступ запрещён. Команда доступна только менторам.")
             return
 
@@ -167,8 +168,8 @@ async def revoke_mentor(message: Message) -> None:
     async with get_session() as session:
         mentor_service = MentorService(session)
         try:
-            actor = await mentor_service.check_mentor_access(message.from_user.id)
-        except MentorNotFoundError:
+            actor = await mentor_service.check_mentor_admin_access(message.from_user.id)
+        except (MentorNotFoundError, MentorAdminRequiredError):
             await message.answer("❌ Доступ запрещён. Команда доступна только менторам.")
             return
 
@@ -239,6 +240,66 @@ async def list_mentors(message: Message) -> None:
             )
 
         await message.answer("\n".join(lines))
+
+
+@router.message(Command("make_mentor_admin"))
+async def make_mentor_admin(message: Message) -> None:
+    """Grant mentor admin role to existing mentor by telegram_id."""
+    if not message.text:
+        await message.answer("❌ Использование: /make_mentor_admin <telegram_id>")
+        return
+
+    parts = message.text.strip().split(maxsplit=1)
+    if len(parts) != 2:
+        await message.answer("❌ Использование: /make_mentor_admin <telegram_id>")
+        return
+
+    try:
+        target_telegram_id = int(parts[1].strip())
+        if target_telegram_id <= 0:
+            raise ValueError
+    except ValueError:
+        await message.answer("❌ Некорректный telegram_id.")
+        return
+
+    async with get_session() as session:
+        mentor_service = MentorService(session)
+        try:
+            actor = await mentor_service.check_mentor_admin_access(message.from_user.id)
+        except (MentorNotFoundError, MentorAdminRequiredError):
+            await message.answer("❌ Доступ запрещён. Команда доступна только mentor-admin.")
+            return
+
+        from sqlalchemy import select
+        from sputnik_offer_crm.models import Mentor
+
+        result = await session.execute(
+            select(Mentor).where(Mentor.telegram_id == target_telegram_id)
+        )
+        target = result.scalar_one_or_none()
+        if not target:
+            await message.answer("❌ Ментор с таким telegram_id не найден.")
+            return
+
+        if target.is_admin:
+            action = "already_admin"
+        else:
+            target.is_admin = True
+            await session.commit()
+            action = "promoted_admin"
+
+        logger.info(
+            "Mentor admin promotion executed",
+            actor_mentor_id=actor.id,
+            actor_telegram_id=actor.telegram_id,
+            target_mentor_id=target.id,
+            target_telegram_id=target.telegram_id,
+            action=action,
+        )
+
+        await message.answer(
+            f"✅ Права mentor-admin выданы пользователю {target_telegram_id}."
+        )
 
 
 @router.message(F.text == "➕ Новый код доступа")

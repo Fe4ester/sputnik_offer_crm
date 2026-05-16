@@ -17,6 +17,12 @@ class MentorNotFoundError(Exception):
     pass
 
 
+class MentorAdminRequiredError(Exception):
+    """Mentor admin access required."""
+
+    pass
+
+
 class NoActiveDirectionsError(Exception):
     """No active directions available."""
 
@@ -52,6 +58,13 @@ class MentorService:
         mentor = await self.get_mentor(telegram_id)
         if not mentor or not mentor.is_active:
             raise MentorNotFoundError("Доступ запрещён")
+        return mentor
+
+    async def check_mentor_admin_access(self, telegram_id: int) -> Mentor:
+        """Check if user has active mentor admin access."""
+        mentor = await self.check_mentor_access(telegram_id)
+        if not mentor.is_admin:
+            raise MentorAdminRequiredError("Доступ запрещён")
         return mentor
 
     async def get_active_directions(self) -> list[Direction]:
