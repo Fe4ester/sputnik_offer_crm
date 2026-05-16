@@ -3,7 +3,7 @@
 from datetime import date, datetime, timezone
 from typing import NamedTuple
 
-from sqlalchemy import select
+from sqlalchemy import and_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from sputnik_offer_crm.models import Student, StudentTask, TaskStatus
@@ -49,6 +49,37 @@ class StudentTaskService:
 
     def __init__(self, session: AsyncSession):
         self.session = session
+
+    async def sync_task_statuses(self, student_id: int | None = None) -> int:
+        """Sync task statuses between open/overdue based on deadline."""
+        today = date.today()
+        filters = [
+            StudentTask.deadline.is_not(None),
+            StudentTask.status.in_([TaskStatus.OPEN.value, TaskStatus.OVERDUE.value]),
+        ]
+        if student_id is not None:
+            filters.append(StudentTask.student_id == student_id)
+
+        result = await self.session.execute(
+            select(StudentTask).where(and_(*filters))
+        )
+        tasks = result.scalars().all()
+
+        changed = 0
+        for task in tasks:
+            if not task.deadline:
+                continue
+            if task.status == TaskStatus.OPEN.value and task.deadline < today:
+                task.status = TaskStatus.OVERDUE.value
+                changed += 1
+            elif task.status == TaskStatus.OVERDUE.value and task.deadline >= today:
+                task.status = TaskStatus.OPEN.value
+                changed += 1
+
+        if changed:
+            await self.session.commit()
+
+        return changed
 
     async def create_task(
         self,
@@ -119,6 +150,8 @@ class StudentTaskService:
 
         if not student:
             raise StudentNotFoundError(f"Student {student_id} not found")
+
+        await self.sync_task_statuses(student_id=student_id)
 
         # Get tasks
         result = await self.session.execute(

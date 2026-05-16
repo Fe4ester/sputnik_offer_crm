@@ -256,6 +256,10 @@ class MentorStudentService:
 
             stages_with_status.append((stage, status, deadline))
 
+        from sputnik_offer_crm.services.student_task import StudentTaskService
+        task_service = StudentTaskService(self.session)
+        await task_service.sync_task_statuses(student_id=student.id)
+
         # Get tasks summary
         from sputnik_offer_crm.models import StudentTask
 

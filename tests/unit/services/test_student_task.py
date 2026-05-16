@@ -446,3 +446,77 @@ async def test_get_task_not_found(
     """Test getting non-existent task."""
     task = await service.get_task(99999)
     assert task is None
+
+
+@pytest.mark.asyncio
+async def test_sync_task_statuses_open_to_overdue(
+    service: StudentTaskService,
+    student: Student,
+    db_session: AsyncSession,
+) -> None:
+    task = StudentTask(
+        student_id=student.id,
+        title="Overdue task",
+        deadline=date.today() - timedelta(days=1),
+        status="open",
+    )
+    db_session.add(task)
+    await db_session.commit()
+
+    changed = await service.sync_task_statuses(student_id=student.id)
+    assert changed == 1
+
+    await db_session.refresh(task)
+    assert task.status == "overdue"
+
+
+@pytest.mark.asyncio
+async def test_sync_task_statuses_overdue_to_open(
+    service: StudentTaskService,
+    student: Student,
+    db_session: AsyncSession,
+) -> None:
+    task = StudentTask(
+        student_id=student.id,
+        title="Reopened task",
+        deadline=date.today() + timedelta(days=1),
+        status="overdue",
+    )
+    db_session.add(task)
+    await db_session.commit()
+
+    changed = await service.sync_task_statuses(student_id=student.id)
+    assert changed == 1
+
+    await db_session.refresh(task)
+    assert task.status == "open"
+
+
+@pytest.mark.asyncio
+async def test_sync_task_statuses_does_not_touch_done_or_cancelled(
+    service: StudentTaskService,
+    student: Student,
+    db_session: AsyncSession,
+) -> None:
+    done_task = StudentTask(
+        student_id=student.id,
+        title="Done",
+        deadline=date.today() - timedelta(days=5),
+        status="done",
+    )
+    cancelled_task = StudentTask(
+        student_id=student.id,
+        title="Cancelled",
+        deadline=date.today() - timedelta(days=5),
+        status="cancelled",
+    )
+    db_session.add_all([done_task, cancelled_task])
+    await db_session.commit()
+
+    changed = await service.sync_task_statuses(student_id=student.id)
+    assert changed == 0
+
+    await db_session.refresh(done_task)
+    await db_session.refresh(cancelled_task)
+    assert done_task.status == "done"
+    assert cancelled_task.status == "cancelled"

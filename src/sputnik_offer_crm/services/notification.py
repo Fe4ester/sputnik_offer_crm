@@ -16,6 +16,7 @@ from sputnik_offer_crm.models import (
     WeeklyReport,
 )
 from sputnik_offer_crm.models.student_task import TaskStatus
+from sputnik_offer_crm.services.student_task import StudentTaskService
 from sputnik_offer_crm.services.weekly_report import WeeklyReportService
 
 
@@ -364,6 +365,9 @@ class NotificationService:
             - overdue task deadlines
             Only for active, non-paused students with open tasks who haven't received reminder today.
         """
+        task_service = StudentTaskService(self.session)
+        await task_service.sync_task_statuses()
+
         # Get all active students (not dropped, not paused)
         result = await self.session.execute(
             select(Student).where(Student.status == "active")
@@ -380,7 +384,9 @@ class NotificationService:
                 select(StudentTask).where(
                     and_(
                         StudentTask.student_id == student.id,
-                        StudentTask.status == TaskStatus.OPEN.value,
+                        StudentTask.status.in_(
+                            [TaskStatus.OPEN.value, TaskStatus.OVERDUE.value]
+                        ),
                         StudentTask.deadline.isnot(None),
                     )
                 )
