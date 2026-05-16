@@ -156,6 +156,78 @@ async def send_deadline_reminders() -> tuple[int, int]:
     return sent, failed
 
 
+async def send_task_reminders() -> tuple[int, int]:
+    """
+    Send task deadline reminders to students.
+
+    Returns:
+        Tuple of (sent_count, failed_count)
+    """
+    settings = get_settings()
+    sent = 0
+    failed = 0
+
+    async with get_session() as session:
+        service = NotificationService(session)
+
+        try:
+            reminders = await service.get_task_reminders(upcoming_days=3)
+            logger.info(f"Found {len(reminders)} task reminders to send")
+
+            if not reminders:
+                return 0, 0
+
+            # Import bot here to avoid circular imports
+            from aiogram import Bot
+            from aiogram.client.default import DefaultBotProperties
+            from aiogram.enums import ParseMode
+
+            bot = Bot(
+                token=settings.bot_token,
+                default=DefaultBotProperties(parse_mode=ParseMode.HTML),
+            )
+
+            try:
+                for reminder in reminders:
+                    try:
+                        await bot.send_message(
+                            chat_id=reminder.recipient.telegram_id,
+                            text=reminder.message,
+                        )
+
+                        # Mark as sent
+                        await service.mark_task_reminder_sent(
+                            reminder.recipient.student_id,
+                            reminder.task_id,
+                            reminder.deadline_date,
+                            reminder.is_overdue,
+                            reminder.message,
+                        )
+                        await session.commit()
+
+                        sent += 1
+                        logger.info(
+                            f"Sent task reminder to student {reminder.recipient.student_id}"
+                        )
+
+                    except Exception as e:
+                        failed += 1
+                        logger.error(
+                            f"Failed to send task reminder to student "
+                            f"{reminder.recipient.student_id}: {e}"
+                        )
+                        await session.rollback()
+
+            finally:
+                await bot.session.close()
+
+        except Exception as e:
+            logger.error(f"Error processing task reminders: {e}")
+            raise
+
+    return sent, failed
+
+
 async def run_notification_job() -> int:
     """
     Run notification job to send all pending reminders.
@@ -179,9 +251,15 @@ async def run_notification_job() -> int:
             f"Deadline reminders: {deadline_sent} sent, {deadline_failed} failed"
         )
 
+        # Send task reminders
+        task_sent, task_failed = await send_task_reminders()
+        logger.info(
+            f"Task reminders: {task_sent} sent, {task_failed} failed"
+        )
+
         # Calculate totals
-        total_sent = weekly_sent + deadline_sent
-        total_failed = weekly_failed + deadline_failed
+        total_sent = weekly_sent + deadline_sent + task_sent
+        total_failed = weekly_failed + deadline_failed + task_failed
 
         end_time = datetime.now(pytz.UTC)
         duration = (end_time - start_time).total_seconds()

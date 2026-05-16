@@ -13,8 +13,10 @@ from sputnik_offer_crm.models import (
     Student,
     StudentProgress,
     StudentStageProgress,
+    StudentTask,
     WeeklyReport,
 )
+from sputnik_offer_crm.models.student_task import TaskStatus
 from sputnik_offer_crm.services.notification import NotificationService
 
 
@@ -378,3 +380,239 @@ async def test_notification_log_created(
     assert log.notification_type == "weekly_report_reminder"
     assert log.notification_key == week_start.isoformat()
     assert log.message == message
+
+
+@pytest.mark.asyncio
+async def test_get_task_reminders_upcoming(
+    service: NotificationService,
+    active_student: Student,
+    db_session: AsyncSession,
+) -> None:
+    """Test task reminder for upcoming deadline."""
+    # Create task with deadline in 2 days
+    deadline = date.today() + timedelta(days=2)
+    task = StudentTask(
+        student_id=active_student.id,
+        title="Test Task",
+        description="Test description",
+        deadline=deadline,
+        status=TaskStatus.OPEN.value,
+    )
+    db_session.add(task)
+    await db_session.commit()
+
+    reminders = await service.get_task_reminders(upcoming_days=3)
+
+    assert len(reminders) == 1
+    assert reminders[0].recipient.student_id == active_student.id
+    assert reminders[0].task_id == task.id
+    assert reminders[0].is_overdue is False
+    assert reminders[0].days_until == 2
+    assert "Напоминание о задаче" in reminders[0].message
+    assert task.title in reminders[0].message
+
+
+@pytest.mark.asyncio
+async def test_get_task_reminders_overdue(
+    service: NotificationService,
+    active_student: Student,
+    db_session: AsyncSession,
+) -> None:
+    """Test task reminder for overdue deadline."""
+    # Create task with deadline 2 days ago
+    deadline = date.today() - timedelta(days=2)
+    task = StudentTask(
+        student_id=active_student.id,
+        title="Overdue Task",
+        description="Test description",
+        deadline=deadline,
+        status=TaskStatus.OPEN.value,
+    )
+    db_session.add(task)
+    await db_session.commit()
+
+    reminders = await service.get_task_reminders()
+
+    assert len(reminders) == 1
+    assert reminders[0].recipient.student_id == active_student.id
+    assert reminders[0].task_id == task.id
+    assert reminders[0].is_overdue is True
+    assert reminders[0].days_until == -2
+    assert "просрочена" in reminders[0].message
+
+
+@pytest.mark.asyncio
+async def test_get_task_reminders_excludes_done(
+    service: NotificationService,
+    active_student: Student,
+    db_session: AsyncSession,
+) -> None:
+    """Test that done tasks don't get reminders."""
+    deadline = date.today() + timedelta(days=1)
+    task = StudentTask(
+        student_id=active_student.id,
+        title="Done Task",
+        deadline=deadline,
+        status=TaskStatus.DONE.value,
+    )
+    db_session.add(task)
+    await db_session.commit()
+
+    reminders = await service.get_task_reminders()
+
+    assert len(reminders) == 0
+
+
+@pytest.mark.asyncio
+async def test_get_task_reminders_excludes_cancelled(
+    service: NotificationService,
+    active_student: Student,
+    db_session: AsyncSession,
+) -> None:
+    """Test that cancelled tasks don't get reminders."""
+    deadline = date.today() + timedelta(days=1)
+    task = StudentTask(
+        student_id=active_student.id,
+        title="Cancelled Task",
+        deadline=deadline,
+        status=TaskStatus.CANCELLED.value,
+    )
+    db_session.add(task)
+    await db_session.commit()
+
+    reminders = await service.get_task_reminders()
+
+    assert len(reminders) == 0
+
+
+@pytest.mark.asyncio
+async def test_get_task_reminders_excludes_no_deadline(
+    service: NotificationService,
+    active_student: Student,
+    db_session: AsyncSession,
+) -> None:
+    """Test that tasks without deadline don't get reminders."""
+    task = StudentTask(
+        student_id=active_student.id,
+        title="No Deadline Task",
+        deadline=None,
+        status=TaskStatus.OPEN.value,
+    )
+    db_session.add(task)
+    await db_session.commit()
+
+    reminders = await service.get_task_reminders()
+
+    assert len(reminders) == 0
+
+
+@pytest.mark.asyncio
+async def test_get_task_reminders_excludes_paused(
+    service: NotificationService,
+    paused_student: Student,
+    db_session: AsyncSession,
+) -> None:
+    """Test that paused students don't get task reminders."""
+    deadline = date.today() + timedelta(days=1)
+    task = StudentTask(
+        student_id=paused_student.id,
+        title="Task for Paused Student",
+        deadline=deadline,
+        status=TaskStatus.OPEN.value,
+    )
+    db_session.add(task)
+    await db_session.commit()
+
+    reminders = await service.get_task_reminders()
+
+    assert len(reminders) == 0
+
+
+@pytest.mark.asyncio
+async def test_get_task_reminders_excludes_inactive(
+    service: NotificationService,
+    inactive_student: Student,
+    db_session: AsyncSession,
+) -> None:
+    """Test that inactive students don't get task reminders."""
+    deadline = date.today() + timedelta(days=1)
+    task = StudentTask(
+        student_id=inactive_student.id,
+        title="Task for Inactive Student",
+        deadline=deadline,
+        status=TaskStatus.OPEN.value,
+    )
+    db_session.add(task)
+    await db_session.commit()
+
+    reminders = await service.get_task_reminders()
+
+    assert len(reminders) == 0
+
+
+@pytest.mark.asyncio
+async def test_get_task_reminders_deduplication(
+    service: NotificationService,
+    active_student: Student,
+    db_session: AsyncSession,
+) -> None:
+    """Test that task reminder is not sent twice in same day."""
+    deadline = date.today() + timedelta(days=1)
+    task = StudentTask(
+        student_id=active_student.id,
+        title="Test Task",
+        deadline=deadline,
+        status=TaskStatus.OPEN.value,
+    )
+    db_session.add(task)
+    await db_session.commit()
+
+    # First call - should return reminder
+    reminders1 = await service.get_task_reminders()
+    assert len(reminders1) == 1
+
+    # Mark as sent
+    await service.mark_task_reminder_sent(
+        active_student.id,
+        task.id,
+        deadline,
+        reminders1[0].is_overdue,
+        reminders1[0].message,
+    )
+    await db_session.commit()
+
+    # Second call - should not return reminder
+    reminders2 = await service.get_task_reminders()
+    assert len(reminders2) == 0
+
+
+@pytest.mark.asyncio
+async def test_get_task_reminders_multiple_tasks(
+    service: NotificationService,
+    active_student: Student,
+    db_session: AsyncSession,
+) -> None:
+    """Test multiple task reminders for same student."""
+    # Create two tasks with upcoming deadlines
+    task1 = StudentTask(
+        student_id=active_student.id,
+        title="Task 1",
+        deadline=date.today() + timedelta(days=1),
+        status=TaskStatus.OPEN.value,
+    )
+    task2 = StudentTask(
+        student_id=active_student.id,
+        title="Task 2",
+        deadline=date.today() + timedelta(days=2),
+        status=TaskStatus.OPEN.value,
+    )
+    db_session.add_all([task1, task2])
+    await db_session.commit()
+
+    reminders = await service.get_task_reminders(upcoming_days=3)
+
+    assert len(reminders) == 2
+    task_ids = {r.task_id for r in reminders}
+    assert task1.id in task_ids
+    assert task2.id in task_ids
+

@@ -65,6 +65,7 @@ from sputnik_offer_crm.services.notification import (
     DeadlineReminder,
     NotificationRecipient,
     NotificationService,
+    TaskReminder,
     WeeklyReportReminder,
 )
 from sputnik_offer_crm.services.direction_management import (
@@ -162,6 +163,7 @@ __all__ = [
     "NotificationRecipient",
     "WeeklyReportReminder",
     "DeadlineReminder",
+    "TaskReminder",
     "DirectionManagementService",
     "DirectionManagementError",
     "DirectionCodeAlreadyExistsError",

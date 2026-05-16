@@ -124,7 +124,7 @@ class StudentTaskService:
         result = await self.session.execute(
             select(StudentTask)
             .where(StudentTask.student_id == student_id)
-            .order_by(StudentTask.created_at.desc())
+            .order_by(StudentTask.created_at.desc(), StudentTask.id.desc())
         )
         tasks = result.scalars().all()
 

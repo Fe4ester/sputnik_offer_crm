@@ -12,8 +12,10 @@ from sputnik_offer_crm.models import (
     Student,
     StudentProgress,
     StudentStageProgress,
+    StudentTask,
     WeeklyReport,
 )
+from sputnik_offer_crm.models.student_task import TaskStatus
 from sputnik_offer_crm.services.weekly_report import WeeklyReportService
 
 
@@ -42,6 +44,18 @@ class DeadlineReminder(NamedTuple):
     stage_id: int
     deadline_date: date
     deadline_title: str
+    days_until: int
+    is_overdue: bool
+    message: str
+
+
+class TaskReminder(NamedTuple):
+    """Task deadline reminder notification."""
+
+    recipient: NotificationRecipient
+    task_id: int
+    task_title: str
+    deadline_date: date
     days_until: int
     is_overdue: bool
     message: str
@@ -326,6 +340,134 @@ class NotificationService:
         """Mark deadline reminder as sent."""
         notification_type = "deadline_overdue" if is_overdue else "deadline_upcoming"
         notification_key = f"stage_{stage_id}_{deadline_date.isoformat()}"
+
+        await self._log_notification(
+            student_id=student_id,
+            notification_type=notification_type,
+            notification_key=notification_key,
+            message=message,
+        )
+
+    async def get_task_reminders(
+        self,
+        upcoming_days: int = 3,
+    ) -> list[TaskReminder]:
+        """
+        Get list of task deadline reminders.
+
+        Args:
+            upcoming_days: how many days ahead to check for upcoming deadlines
+
+        Returns:
+            List of TaskReminder for:
+            - upcoming task deadlines (within upcoming_days)
+            - overdue task deadlines
+            Only for active, non-paused students with open tasks who haven't received reminder today.
+        """
+        # Get all active students (not dropped, not paused)
+        result = await self.session.execute(
+            select(Student).where(Student.status == "active")
+        )
+        students = result.scalars().all()
+
+        reminders = []
+        now = datetime.now(pytz.UTC)
+        today = now.date()
+
+        for student in students:
+            # Get student's open tasks with deadlines
+            tasks_result = await self.session.execute(
+                select(StudentTask).where(
+                    and_(
+                        StudentTask.student_id == student.id,
+                        StudentTask.status == TaskStatus.OPEN.value,
+                        StudentTask.deadline.isnot(None),
+                    )
+                )
+            )
+            tasks = tasks_result.scalars().all()
+
+            for task in tasks:
+                if not task.deadline:
+                    continue
+
+                deadline_date = task.deadline
+                days_until = (deadline_date - today).days
+
+                # Check if deadline is upcoming or overdue
+                is_overdue = days_until < 0
+                is_upcoming = 0 <= days_until <= upcoming_days
+
+                if not (is_overdue or is_upcoming):
+                    continue
+
+                # Determine notification key and type
+                if is_overdue:
+                    notification_type = "task_overdue"
+                    notification_key = f"task_{task.id}_{deadline_date.isoformat()}"
+                else:
+                    notification_type = "task_upcoming"
+                    notification_key = f"task_{task.id}_{deadline_date.isoformat()}"
+
+                # Check if reminder already sent today
+                if await self._was_notification_sent_today(
+                    student.id,
+                    notification_type,
+                    notification_key,
+                ):
+                    continue
+
+                # Create reminder
+                recipient = NotificationRecipient(
+                    student_id=student.id,
+                    telegram_id=student.telegram_id,
+                    first_name=student.first_name,
+                    last_name=student.last_name,
+                    timezone=student.timezone,
+                )
+
+                if is_overdue:
+                    message = (
+                        f"⚠️ Задача просрочена\n\n"
+                        f"📋 Задача: {task.title}\n"
+                        f"📅 Дедлайн был: {deadline_date.strftime('%d.%m.%Y')}\n"
+                        f"⏰ Просрочено на {abs(days_until)} дн.\n\n"
+                        f"Обратитесь к ментору или завершите задачу."
+                    )
+                else:
+                    message = (
+                        f"📅 Напоминание о задаче\n\n"
+                        f"📋 Задача: {task.title}\n"
+                        f"📅 Дедлайн: {deadline_date.strftime('%d.%m.%Y')}\n"
+                        f"⏰ Осталось {days_until} дн.\n\n"
+                        f"Не забудьте завершить задачу вовремя!"
+                    )
+
+                reminders.append(
+                    TaskReminder(
+                        recipient=recipient,
+                        task_id=task.id,
+                        task_title=task.title,
+                        deadline_date=deadline_date,
+                        days_until=days_until,
+                        is_overdue=is_overdue,
+                        message=message,
+                    )
+                )
+
+        return reminders
+
+    async def mark_task_reminder_sent(
+        self,
+        student_id: int,
+        task_id: int,
+        deadline_date: date,
+        is_overdue: bool,
+        message: str,
+    ) -> None:
+        """Mark task reminder as sent."""
+        notification_type = "task_overdue" if is_overdue else "task_upcoming"
+        notification_key = f"task_{task_id}_{deadline_date.isoformat()}"
 
         await self._log_notification(
             student_id=student_id,
