@@ -144,6 +144,103 @@ async def make_mentor(message: Message) -> None:
         )
 
 
+@router.message(Command("revoke_mentor"))
+async def revoke_mentor(message: Message) -> None:
+    """Revoke mentor access by telegram_id (soft deactivation)."""
+    if not message.text:
+        await message.answer("❌ Использование: /revoke_mentor <telegram_id>")
+        return
+
+    parts = message.text.strip().split(maxsplit=1)
+    if len(parts) != 2:
+        await message.answer("❌ Использование: /revoke_mentor <telegram_id>")
+        return
+
+    try:
+        target_telegram_id = int(parts[1].strip())
+        if target_telegram_id <= 0:
+            raise ValueError
+    except ValueError:
+        await message.answer("❌ Некорректный telegram_id.")
+        return
+
+    async with get_session() as session:
+        mentor_service = MentorService(session)
+        try:
+            actor = await mentor_service.check_mentor_access(message.from_user.id)
+        except MentorNotFoundError:
+            await message.answer("❌ Доступ запрещён. Команда доступна только менторам.")
+            return
+
+        from sqlalchemy import select
+        from sputnik_offer_crm.models import Mentor
+
+        mentor_result = await session.execute(
+            select(Mentor).where(Mentor.telegram_id == target_telegram_id)
+        )
+        target = mentor_result.scalar_one_or_none()
+        if not target:
+            await message.answer("❌ Ментор с таким telegram_id не найден.")
+            return
+
+        if target.is_active:
+            target.is_active = False
+            await session.commit()
+            action = "revoked"
+        else:
+            action = "already_revoked"
+
+        logger.info(
+            "Mentor revoke executed",
+            actor_mentor_id=actor.id,
+            actor_telegram_id=actor.telegram_id,
+            target_telegram_id=target_telegram_id,
+            target_mentor_id=target.id,
+            action=action,
+        )
+
+        await message.answer(
+            f"✅ Права ментора отозваны у пользователя {target_telegram_id}."
+        )
+
+
+@router.message(Command("list_mentors"))
+async def list_mentors(message: Message) -> None:
+    """List mentors (ops read-only)."""
+    async with get_session() as session:
+        mentor_service = MentorService(session)
+        try:
+            await mentor_service.check_mentor_access(message.from_user.id)
+        except MentorNotFoundError:
+            await message.answer("❌ Доступ запрещён. Команда доступна только менторам.")
+            return
+
+        from sqlalchemy import desc, select
+        from sputnik_offer_crm.models import Mentor
+
+        result = await session.execute(
+            select(Mentor).order_by(desc(Mentor.is_active), Mentor.id.asc())
+        )
+        mentors = result.scalars().all()
+
+        if not mentors:
+            await message.answer("ℹ️ Список менторов пуст.")
+            return
+
+        lines = ["👨‍🏫 Список менторов\n"]
+        for idx, mentor in enumerate(mentors, 1):
+            status = "active" if mentor.is_active else "inactive"
+            full_name = mentor.first_name
+            if mentor.last_name:
+                full_name += f" {mentor.last_name}"
+            username = f"@{mentor.username}" if mentor.username else "—"
+            lines.append(
+                f"{idx}. {full_name} | id:{mentor.telegram_id} | user:{username} | {status}"
+            )
+
+        await message.answer("\n".join(lines))
+
+
 @router.message(F.text == "➕ Новый код доступа")
 async def start_invite_code_creation(message: Message, state: FSMContext) -> None:
     """Start invite code creation flow."""
