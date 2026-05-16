@@ -2750,8 +2750,8 @@ async def handle_view_student_tasks(callback: CallbackQuery) -> None:
                         mentor_note = mentor_note[:100] + "..."
                     lines.append(f"   📋 Заметка: {mentor_note}")
 
-                # Add cancel button for open tasks
-                if task.status == "open":
+                # Add cancel button for open/overdue tasks
+                if task.status in ("open", "overdue"):
                     buttons.append([
                         InlineKeyboardButton(
                             text=f"❌ Отменить #{i}",
