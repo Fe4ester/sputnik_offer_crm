@@ -1,7 +1,7 @@
 """add is_admin to mentors
 
 Revision ID: c9f1b4a7d2f0
-Revises: 049f51ffe618
+Revises: add_student_status_enum
 Create Date: 2026-05-16 15:20:00.000000
 """
 
@@ -13,7 +13,7 @@ import sqlalchemy as sa
 
 # revision identifiers, used by Alembic.
 revision: str = "c9f1b4a7d2f0"
-down_revision: Union[str, None] = "049f51ffe618"
+down_revision: Union[str, None] = "add_student_status_enum"
 branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
 
