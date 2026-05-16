@@ -3061,6 +3061,53 @@ async def handle_recent_reports(message: Message) -> None:
             )
 
 
+@router.callback_query(F.data == "recent_reports_list")
+async def handle_recent_reports_list(callback: CallbackQuery) -> None:
+    """Handle returning to recent reports list."""
+    await callback.answer()
+
+    async with get_session() as session:
+        mentor_service = MentorService(session)
+        try:
+            await mentor_service.check_mentor_access(callback.from_user.id)
+        except MentorNotFoundError:
+            await callback.message.edit_text("❌ Доступ запрещён. Вы не являетесь ментором.")
+            return
+
+        from sputnik_offer_crm.services.mentor_weekly_reports import MentorWeeklyReportsService
+
+        service = MentorWeeklyReportsService(session)
+        reports = await service.get_recent_reports(limit=15)
+
+        if not reports:
+            await callback.message.edit_text(
+                "📝 Пока нет отчётов от учеников.",
+                reply_markup=None,
+            )
+            return
+
+        lines = ["📝 Последние отчёты учеников\n"]
+        buttons = []
+        for i, report in enumerate(reports, 1):
+            week_str = report.week_start_date.strftime("%d.%m.%Y")
+            problem_indicator = " ⚠️" if report.has_problems_unsolved else ""
+            lines.append(f"{i}. {report.student_name} — {week_str}{problem_indicator}")
+            buttons.append([
+                InlineKeyboardButton(
+                    text=f"📄 Открыть #{i}",
+                    callback_data=f"open_recent_report:{report.id}"
+                )
+            ])
+        if len(reports) == 15:
+            lines.append("")
+            lines.append("(показаны последние 15 отчётов)")
+
+        await callback.message.edit_text(
+            "\n".join(lines),
+            reply_markup=InlineKeyboardMarkup(inline_keyboard=buttons),
+        )
+
+
 @router.callback_query(F.data.startswith("open_recent_report:"))
 async def handle_open_recent_report(callback: CallbackQuery) -> None:
     """Handle opening report from recent list."""
@@ -3105,7 +3152,14 @@ async def handle_open_recent_report(callback: CallbackQuery) -> None:
                 lines.append(report.answer_problems_unsolved)
                 lines.append("")
 
-            await callback.message.edit_text("\n".join(lines))
+            await callback.message.edit_text(
+                "\n".join(lines),
+                reply_markup=InlineKeyboardMarkup(
+                    inline_keyboard=[
+                        [InlineKeyboardButton(text="◀️ К списку отчётов", callback_data="recent_reports_list")]
+                    ]
+                ),
+            )
 
             logger.info(
                 "Mentor viewed recent report detail",
