@@ -335,6 +335,10 @@ async def handle_search_cancel(callback: CallbackQuery) -> None:
     """Handle search cancellation."""
     await callback.answer()
     await callback.message.edit_text("❌ Поиск отменён.")
+    await callback.message.answer(
+        "👨‍🏫 Меню ментора\n\nВыберите действие:",
+        reply_markup=get_mentor_menu_keyboard(),
+    )
 
 
 async def show_student_card(message: Message, student_id: int) -> None:
