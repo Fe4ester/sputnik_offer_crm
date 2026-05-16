@@ -310,7 +310,11 @@ async def submit_weekly_report(message: Message, state: FSMContext) -> None:
 async def handle_my_tasks(message: Message) -> None:
     """Handle student tasks view request."""
     async with get_session() as session:
-        from sputnik_offer_crm.services.student_task import StudentTaskService, StudentNotFoundError
+        from sputnik_offer_crm.services.student_task import (
+            StudentAccessDeniedError,
+            StudentNotFoundError,
+            StudentTaskService,
+        )
 
         service = StudentTaskService(session)
         try:
@@ -390,6 +394,11 @@ async def handle_my_tasks(message: Message) -> None:
         except StudentNotFoundError:
             await message.answer(
                 "❌ Ваш профиль не найден.",
+                reply_markup=get_student_menu_keyboard(),
+            )
+        except StudentAccessDeniedError as e:
+            await message.answer(
+                f"ℹ️ {str(e)}",
                 reply_markup=get_student_menu_keyboard(),
             )
         except Exception as e:

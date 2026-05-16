@@ -44,6 +44,10 @@ class InvalidTaskTransitionError(StudentTaskError):
     """Invalid task status transition."""
 
 
+class StudentAccessDeniedError(StudentTaskError):
+    """Student has no access to task actions in current lifecycle state."""
+
+
 class StudentTaskService:
     """Service for student task operations."""
 
@@ -196,6 +200,12 @@ class StudentTaskService:
 
         if not student:
             raise StudentNotFoundError(f"Student with telegram_id {telegram_id} not found")
+        if not student.is_eligible_for_notifications():
+            if student.is_dropped():
+                raise StudentAccessDeniedError("Ваш аккаунт неактивен. Обратитесь к ментору.")
+            if student.is_on_pause():
+                raise StudentAccessDeniedError("Вы на паузе. Обратитесь к ментору для возобновления.")
+            raise StudentAccessDeniedError("Ваш аккаунт неактивен. Обратитесь к ментору.")
 
         return await self.get_student_tasks(student.id)
 
@@ -234,6 +244,12 @@ class StudentTaskService:
 
         if not student:
             raise TaskNotFoundError(f"Task {task_id} not found for this student")
+        if not student.is_eligible_for_notifications():
+            if student.is_dropped():
+                raise InvalidTaskTransitionError("Ваш аккаунт неактивен. Обратитесь к ментору.")
+            if student.is_on_pause():
+                raise InvalidTaskTransitionError("Вы на паузе. Обратитесь к ментору для возобновления.")
+            raise InvalidTaskTransitionError("Ваш аккаунт неактивен. Обратитесь к ментору.")
 
         # Check current status
         if task.status == TaskStatus.DONE.value:
